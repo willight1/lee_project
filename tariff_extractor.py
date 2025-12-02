@@ -158,6 +158,8 @@ class TariffDatabase:
                 effective_date_from TEXT,
                 effective_date_to TEXT,
                 basis_law TEXT,
+                company TEXT,
+                case_number TEXT,
                 note TEXT,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 FOREIGN KEY (doc_id) REFERENCES documents(doc_id) ON DELETE CASCADE
@@ -223,8 +225,9 @@ class TariffDatabase:
             self.cursor.execute("""
                 INSERT INTO tariff_items (
                     doc_id, country, hs_code, tariff_type, tariff_rate,
-                    effective_date_from, effective_date_to, basis_law, note
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    effective_date_from, effective_date_to, basis_law,
+                    company, case_number, note
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 doc_id,
                 country,
@@ -234,6 +237,8 @@ class TariffDatabase:
                 item.get('effective_date_from'),
                 item.get('effective_date_to'),
                 item.get('basis_law'),
+                item.get('company'),
+                item.get('case_number'),
                 item.get('note')
             ))
             self.conn.commit()
@@ -351,7 +356,9 @@ def create_tariff_extraction_prompt(pdf_text: str) -> str:
 - effective_date_from: 적용 시작일, YYYY-MM-DD (예: "2025-01-01")
 - effective_date_to: 적용 종료일, 없으면 null
 - basis_law: 공고명/법령명 (없으면 null)
-- note: 기타 주석/예외조건 (케이스 번호가 있으면 여기에 기록, 예: "Case A-580-878")
+- company: 생산자/수출업체명 (예: "POSCO", "Hyundai Steel", "All Others"). 없으면 null
+- case_number: 케이스 번호만 (예: "A-580-878", "C-580-888"). 없으면 null
+- note: 기타 주석/예외조건 (관세율 범위나 특이사항). 없으면 null
 
 [출력 형식]
 
@@ -367,6 +374,8 @@ def create_tariff_extraction_prompt(pdf_text: str) -> str:
       "effective_date_from": string | null,
       "effective_date_to": string | null,
       "basis_law": string | null,
+      "company": string | null,
+      "case_number": string | null,
       "note": string | null
     }}
   ]
@@ -378,9 +387,16 @@ def create_tariff_extraction_prompt(pdf_text: str) -> str:
 3. "5~8%" 같이 범위면 tariff_rate는 null, note에 원문 그대로 쓴다.
 4. "2025. 1. 1." 형태 날짜는 "2025-01-01"로 변환한다.
 5. 필요한 정보가 없으면 "items": [] 를 반환한다.
-6. **중요**: A-XXX-XXX, C-XXX-XXX 형태는 케이스 번호이므로 hs_code에 절대 넣지 말 것. note 필드에 기록할 것.
-7. hs_code는 반드시 숫자로 시작해야 함 (7XXX, 8XXX 등).
-8. JSON 이외의 텍스트는 아무것도 출력하지 말라.
+6. **중요**: A-XXX-XXX, C-XXX-XXX 형태는 케이스 번호이므로 case_number 필드에만 기록할 것.
+7. **중요**: 회사명/생산자명은 company 필드에, 케이스 번호는 case_number 필드에 **분리해서** 저장할 것.
+   - 올바른 예: "company": "POSCO", "case_number": "C-580-884"
+   - 잘못된 예: "company": "POSCO, Case C-580-884"
+8. hs_code는 반드시 숫자로 시작해야 함 (7XXX, 8XXX 등).
+9. **중요**: "Current duties", "Measures", "Duty rates" 등의 표를 **반드시** 찾아서 추출할 것.
+   - "Floor price", "Combination", "Fixed duty" 등은 tariff_type에 포함
+   - 표에 있는 모든 회사(exporter)별 관세율을 빠짐없이 추출
+   - "All other exporters", "All Others" 등도 company 필드에 저장
+10. JSON 이외의 텍스트는 아무것도 출력하지 말라.
 
 [분석할 텍스트]
 
@@ -444,30 +460,36 @@ class TariffExtractor:
             print(f"  ✗ Error extracting PDF: {e}")
             return []
 
-    def call_claude_api(self, prompt: str) -> str:
-        """Call Claude API with prompt"""
-        try:
-            message = self.client.messages.create(
-                model=MODEL_NAME,
-                max_tokens=16000,
-                messages=[{"role": "user", "content": prompt}]
-            )
+    def call_claude_api(self, prompt: str, max_retries: int = 2) -> str:
+        """Call Claude API with prompt and retry logic"""
+        for attempt in range(max_retries):
+            try:
+                message = self.client.messages.create(
+                    model=MODEL_NAME,
+                    max_tokens=16000,  # Optimal balance between size and speed
+                    messages=[{"role": "user", "content": prompt}]
+                )
 
-            response_text = message.content[0].text.strip()
+                response_text = message.content[0].text.strip()
 
-            # Remove code block markers if present
-            if response_text.startswith("```"):
-                lines = response_text.split('\n')
-                lines = lines[1:]  # Remove ```json or ```
-                if lines and lines[-1].strip() == "```":
-                    lines = lines[:-1]  # Remove closing ```
-                response_text = '\n'.join(lines).strip()
+                # Remove code block markers if present
+                if response_text.startswith("```"):
+                    lines = response_text.split('\n')
+                    lines = lines[1:]  # Remove ```json or ```
+                    if lines and lines[-1].strip() == "```":
+                        lines = lines[:-1]  # Remove closing ```
+                    response_text = '\n'.join(lines).strip()
 
-            return response_text
+                return response_text
 
-        except Exception as e:
-            print(f"  ✗ Claude API error: {e}")
-            return ""
+            except Exception as e:
+                if attempt < max_retries - 1:
+                    print(f"  ⚠ Attempt {attempt + 1} failed, retrying...")
+                else:
+                    print(f"  ✗ Claude API error after {max_retries} attempts: {e}")
+                    return ""
+
+        return ""
 
     def process_raw_mode(self, doc_id: int, pdf_path: str):
         """Process PDF in RAW mode - extract and store raw text"""
@@ -531,21 +553,71 @@ class TariffExtractor:
             print(f"  ✗ No pages extracted")
             return False
 
-        # Combine all pages
-        full_text = "\n\n".join([text for _, text in pages])
+        total_pages = len(pages)
 
-        # Call Claude to extract tariff data
-        prompt = create_tariff_extraction_prompt(full_text)
-        response = self.call_claude_api(prompt)
+        # For large documents (>50 pages), process in chunks
+        # For smaller documents, process all at once
+        if total_pages > 50:
+            print(f"  ℹ Large document ({total_pages} pages), processing in chunks...")
+            chunk_size = 30  # Process 30 pages at a time
+            all_items = []
 
-        if not response:
-            print(f"  ✗ No response from Claude API")
-            return False
+            # Process each chunk
+            for i in range(0, len(pages), chunk_size):
+                chunk = pages[i:i + chunk_size]
+                chunk_start = chunk[0][0]
+                chunk_end = chunk[-1][0]
 
-        # Parse JSON response
+                print(f"  → Processing pages {chunk_start}-{chunk_end}...")
+
+                # Combine pages in this chunk
+                chunk_text = "\n\n".join([text for _, text in chunk])
+
+                # Call Claude to extract tariff data from this chunk
+                prompt = create_tariff_extraction_prompt(chunk_text)
+                response = self.call_claude_api(prompt)
+
+                if not response:
+                    print(f"  ⚠ No response for pages {chunk_start}-{chunk_end}, skipping...")
+                    continue
+
+                # Parse this chunk's response
+                try:
+                    items = self._parse_json_response(response)
+                    if items:
+                        all_items.extend(items)
+                        print(f"  ✓ Found {len(items)} items in pages {chunk_start}-{chunk_end}")
+                except Exception as e:
+                    print(f"  ⚠ Error parsing pages {chunk_start}-{chunk_end}: {e}")
+                    continue
+
+            # Store all collected items
+            if not all_items:
+                print(f"  ⚠ No tariff items found in entire document")
+                return True
+
+            self.db.delete_tariff_items_by_doc(doc_id)
+            for item in all_items:
+                self.db.insert_tariff_item(doc_id, item)
+
+            print(f"  ✓ Stored {len(all_items)} total tariff items in database")
+            return True
+
+        else:
+            # Small document - process all at once
+            full_text = "\n\n".join([text for _, text in pages])
+
+            # Call Claude to extract tariff data
+            prompt = create_tariff_extraction_prompt(full_text)
+            response = self.call_claude_api(prompt)
+
+            if not response:
+                print(f"  ✗ No response from Claude API")
+                return False
+
+        # Parse JSON response with better error handling
         try:
-            data = json.loads(response)
-            items = data.get('items', [])
+            items = self._parse_json_response(response)
 
             if not items:
                 print(f"  ⚠ No tariff items found")
@@ -562,8 +634,52 @@ class TariffExtractor:
 
         except json.JSONDecodeError as e:
             print(f"  ✗ JSON parsing error: {e}")
-            print(f"  Response: {response[:500]}")
+            print(f"  Response length: {len(response)} chars")
+            print(f"  First 300 chars: {response[:300]}")
+            print(f"  Last 300 chars: {response[-300:]}")
             return False
+
+    def _parse_json_response(self, response: str) -> list:
+        """Parse JSON response from Claude API and return items list"""
+        import re
+
+        # Clean up markdown code blocks if present
+        if '```' in response:
+            # Extract content between ```json and ``` or ``` and ```
+            json_match = re.search(r'```(?:json)?\s*\n(.*?)\n```', response, re.DOTALL)
+            if json_match:
+                response = json_match.group(1)
+            else:
+                # If regex fails, try to find first { to last }
+                first_brace = response.find('{')
+                last_brace = response.rfind('}')
+                if first_brace != -1 and last_brace != -1:
+                    response = response[first_brace:last_brace+1]
+
+        # Remove any leading/trailing non-JSON content
+        response = response.strip()
+        if not response.startswith('{'):
+            first_brace = response.find('{')
+            if first_brace != -1:
+                response = response[first_brace:]
+
+        # Try to fix incomplete JSON by adding closing brackets
+        if not response.rstrip().endswith('}'):
+            # Count opening and closing brackets
+            open_braces = response.count('{')
+            close_braces = response.count('}')
+            open_brackets = response.count('[')
+            close_brackets = response.count(']')
+
+            # Add missing closing characters
+            if close_brackets < open_brackets:
+                response += '\n]' * (open_brackets - close_brackets)
+            if close_braces < open_braces:
+                response += '\n}' * (open_braces - close_braces)
+
+        data = json.loads(response)
+        items = data.get('items', [])
+        return items
 
     def process_single_pdf(self, pdf_path: str):
         """Process a single PDF file"""
@@ -651,6 +767,10 @@ def main():
                        help='Processing mode: raw (text extraction), json (tariff data), both')
     parser.add_argument('--input', default=INPUT_FOLDER,
                        help=f'Input folder containing PDF files (default: {INPUT_FOLDER})')
+    parser.add_argument('--file', type=str, default=None,
+                       help='Process only this specific PDF file (filename only, not full path)')
+    parser.add_argument('--reprocess', action='store_true',
+                       help='Delete existing data for the file before reprocessing')
 
     args = parser.parse_args()
 
@@ -671,7 +791,31 @@ def main():
         return
 
     # Process PDFs
-    extractor.process_folder(args.input)
+    if args.file:
+        # Process single file
+        pdf_path = os.path.join(args.input, args.file)
+        if not os.path.exists(pdf_path):
+            print(f"✗ File not found: {pdf_path}")
+            return
+
+        # Delete existing data if reprocess flag is set
+        if args.reprocess:
+            db.cursor.execute("SELECT doc_id FROM documents WHERE file_name = ?", (args.file,))
+            result = db.cursor.fetchone()
+            if result:
+                doc_id = result[0]
+                print(f"✓ Deleting existing data for {args.file} (doc_id: {doc_id})")
+                db.cursor.execute("DELETE FROM tariff_items WHERE doc_id = ?", (doc_id,))
+                db.cursor.execute("DELETE FROM pages WHERE doc_id = ?", (doc_id,))
+                db.cursor.execute("DELETE FROM documents WHERE doc_id = ?", (doc_id,))
+                db.conn.commit()
+
+        print(f"\nProcessing single file: {args.file}")
+        print("="*60)
+        extractor.process_single_pdf(pdf_path)
+    else:
+        # Process all files in folder
+        extractor.process_folder(args.input)
 
     # Show statistics
     stats = db.get_stats()
