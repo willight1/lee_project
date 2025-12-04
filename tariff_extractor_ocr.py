@@ -1,13 +1,13 @@
 """
-Tariff Information Extractor - 통합 버전
+Tariff Information Extractor - OCR 버전 (저비용)
 
-OCR(텍스트 추출) 및 Vision API 모드를 지원하는 통합 관세 정보 추출기
+Vision API 대신 텍스트 추출 + 저렴한 LLM 파싱으로 비용 절감
+- 143페이지 Vision: $50-80
+- 143페이지 OCR: $2-5 (10-15배 저렴!)
 
-사용법:
-    python tariff_extractor.py --mode=ocr                    # OCR 모드 (저비용)
-    python tariff_extractor.py --mode=vision                 # Vision API 모드 (고정확도)
-    python tariff_extractor.py --mode=ocr --file=파일명.pdf   # 특정 파일만
-    python tariff_extractor.py --mode=vision --reprocess     # 재처리
+Usage:
+    python tariff_extractor_ocr.py
+    python tariff_extractor_ocr.py --file=파일명.pdf
 """
 
 import os
@@ -15,6 +15,7 @@ import argparse
 import fitz  # PyMuPDF
 from dotenv import load_dotenv
 from openai import OpenAI
+from typing import Dict, List
 
 from database import TariffDatabase
 from parsers import ParserFactory
@@ -26,13 +27,20 @@ load_dotenv()
 INPUT_FOLDER = "PDF"
 DB_PATH = "tariff_data.db"
 
+# OCR 설정
+MAX_PAGES_PER_BATCH = 50  # 한 번에 처리할 최대 페이지 수
+TEXT_MODEL = "gpt-4o-mini"  # 저렴한 텍스트 모델
 
-class TariffExtractor:
-    """통합 Tariff Extractor (OCR + Vision)"""
 
-    def __init__(self, db: TariffDatabase, mode: str = "ocr"):
+# ============================================================================
+# TARIFF EXTRACTOR (OCR 버전)
+# ============================================================================
+
+class TariffExtractorOCR:
+    """OCR 기반 저비용 Tariff Extractor"""
+
+    def __init__(self, db: TariffDatabase):
         self.db = db
-        self.mode = mode
 
         # OpenAI 클라이언트 초기화
         api_key = os.environ.get("OPENAI_API_KEY")
@@ -51,16 +59,15 @@ class TariffExtractor:
         # 발행국 추론
         issuing_country = ParserFactory.detect_issuing_country(file_name)
         print(f"  Issuing country: {issuing_country}")
-        print(f"  Mode: {self.mode.upper()}")
 
         # 파일 정보
         file_size = os.path.getsize(pdf_path)
 
-        # 파서 생성 (모드에 따라 OCR 또는 Vision)
-        parser = ParserFactory.create_parser(file_name, self.client, self.mode)
+        # 파서 생성
+        parser = ParserFactory.create_parser(file_name, self.client)
 
-        # 관세 정보 추출
-        print(f"  Extracting tariff information...")
+        # 텍스트 추출 + LLM 파싱
+        print(f"  Extracting tariff information with OCR + LLM...")
         items = parser.process(pdf_path)
 
         if not items:
@@ -73,14 +80,13 @@ class TariffExtractor:
         doc.close()
 
         # documents 테이블에 기록
-        processing_mode = f"{self.mode}_mode"
         doc_id = self.db.insert_document(
             file_name=file_name,
             file_path=pdf_path,
             issuing_country=issuing_country,
             total_pages=total_pages,
             file_size=file_size,
-            processing_mode=processing_mode
+            processing_mode="ocr_text_llm"
         )
 
         if not doc_id:
@@ -112,7 +118,6 @@ class TariffExtractor:
 
         print(f"\n{'='*80}")
         print(f"Found {len(pdf_files)} PDF files")
-        print(f"Mode: {self.mode.upper()}")
         print(f"{'='*80}")
 
         successful = 0
@@ -140,10 +145,14 @@ class TariffExtractor:
                 print(f"  - {f}")
 
 
+# ============================================================================
+# MAIN
+# ============================================================================
+
 def main():
     """메인 실행"""
     parser = argparse.ArgumentParser(
-        description='Tariff Information Extractor - Unified Version (OCR + Vision)'
+        description='Tariff Information Extractor - OCR Version (Low Cost)'
     )
     parser.add_argument(
         '--input',
@@ -157,13 +166,6 @@ def main():
         help='Process only this specific PDF file'
     )
     parser.add_argument(
-        '--mode',
-        type=str,
-        choices=['ocr', 'vision'],
-        default='ocr',
-        help='Processing mode: ocr (low cost) or vision (high accuracy)'
-    )
-    parser.add_argument(
         '--reprocess',
         action='store_true',
         help='Delete existing data before reprocessing'
@@ -172,15 +174,12 @@ def main():
     args = parser.parse_args()
 
     print("="*80)
-    print("Tariff Information Extractor - Unified Version")
+    print("Tariff Information Extractor - OCR Version (Low Cost)")
+    print("Text Extraction + Cheap LLM Parsing")
     print("="*80)
-    print(f"\nMode: {args.mode.upper()}")
-    if args.mode == "ocr":
-        print("  - Text Extraction + Cheap LLM Parsing")
-        print("  - Cost: $2-5 per 143 pages (10-15x cheaper than Vision)")
-    else:
-        print("  - Vision API + High-Quality Image Processing")
-        print("  - Cost: $50-80 per 143 pages (highest accuracy)")
+    print("\n💰 Cost savings:")
+    print("  - Vision API: $50-80 per 143 pages")
+    print("  - OCR + LLM: $2-5 per 143 pages (10-15x cheaper!)")
     print("="*80)
 
     # DB 초기화
@@ -188,7 +187,7 @@ def main():
 
     # Extractor 생성
     try:
-        extractor = TariffExtractor(db, mode=args.mode)
+        extractor = TariffExtractorOCR(db)
     except ValueError as e:
         print(f"\n✗ Error: {e}")
         print("\nPlease set OPENAI_API_KEY in .env file")
