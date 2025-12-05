@@ -6,10 +6,10 @@ Parser Factory
 from openai import OpenAI
 from .base_parser import TextBasedParser, VisionBasedParser
 from .default_parser import DefaultTextParser
-from .usa_parser import USATextParser, USAVisionParser
-from .eu_parser import EUTextParser, EUVisionParser
-from .malaysia_parser import MalaysiaTextParser, MalaysiaVisionParser
-from .australia_parser import AustraliaTextParser, AustraliaVisionParser
+from .usa_parser import USATextParser, USAVisionParser, USAHybridParser
+from .eu_parser import EUTextParser, EUVisionParser, EUHybridParser
+from .malaysia_parser import MalaysiaTextParser, MalaysiaVisionParser, MalaysiaHybridParser
+from .australia_parser import AustraliaTextParser, AustraliaVisionParser, AustraliaHybridParser
 from .brazil_parser import BrazilParser
 from .india_parser import IndiaParser
 from .canada_parser import CanadaParser
@@ -24,7 +24,7 @@ class ParserFactory:
     def create_parser(
         file_name: str,
         client: OpenAI,
-        mode: str = "ocr"
+        mode: str = "hybrid"
     ):
         """
         파일명 및 모드 기반으로 파서 생성
@@ -32,7 +32,7 @@ class ParserFactory:
         Args:
             file_name: PDF 파일명
             client: OpenAI 클라이언트
-            mode: "ocr" (텍스트 추출) 또는 "vision" (Vision API)
+            mode: "ocr" (텍스트 추출), "vision" (Vision API), "hybrid" (자동 폴백, 기본값)
 
         Returns:
             적절한 파서 인스턴스
@@ -40,16 +40,19 @@ class ParserFactory:
         file_name_upper = file_name.upper()
         mode = mode.lower()
 
-        if mode not in ["ocr", "vision"]:
-            print(f"  ⚠ Invalid mode '{mode}', defaulting to 'ocr'")
-            mode = "ocr"
+        if mode not in ["ocr", "vision", "hybrid"]:
+            print(f"  ⚠ Invalid mode '{mode}', defaulting to 'hybrid'")
+            mode = "hybrid"
 
         # 국가별 파서 매핑
         if 'USA_' in file_name_upper or 'US_' in file_name_upper:
             if mode == "vision":
                 print("  Using USA Vision Parser")
                 return USAVisionParser(client)
-            else:
+            elif mode == "hybrid":
+                print("  Using USA Hybrid Parser (Text → Vision Fallback)")
+                return USAHybridParser(client)
+            else:  # ocr
                 print("  Using USA Text Parser (OCR)")
                 return USATextParser(client)
 
@@ -57,7 +60,10 @@ class ParserFactory:
             if mode == "vision":
                 print("  Using EU Vision Parser")
                 return EUVisionParser(client)
-            else:
+            elif mode == "hybrid":
+                print("  Using EU Hybrid Parser (Text → Vision Fallback)")
+                return EUHybridParser(client)
+            else:  # ocr
                 print("  Using EU Text Parser (OCR)")
                 return EUTextParser(client)
 
@@ -65,7 +71,10 @@ class ParserFactory:
             if mode == "vision":
                 print("  Using Malaysia Vision Parser")
                 return MalaysiaVisionParser(client)
-            else:
+            elif mode == "hybrid":
+                print("  Using Malaysia Hybrid Parser (Text → Vision Fallback)")
+                return MalaysiaHybridParser(client)
+            else:  # ocr
                 print("  Using Malaysia Text Parser (OCR)")
                 return MalaysiaTextParser(client)
 
@@ -73,7 +82,10 @@ class ParserFactory:
             if mode == "vision":
                 print("  Using Australia Vision Parser")
                 return AustraliaVisionParser(client)
-            else:
+            elif mode == "hybrid":
+                print("  Using Australia Hybrid Parser (Text → Vision Fallback)")
+                return AustraliaHybridParser(client)
+            else:  # ocr
                 print("  Using Australia Text Parser (OCR)")
                 return AustraliaTextParser(client)
 

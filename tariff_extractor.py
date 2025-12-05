@@ -94,7 +94,104 @@ class TariffExtractor:
             self.db.insert_tariff_item(doc_id, item, issuing_country)
 
         print(f"  ✓ Successfully processed: {len(items)} tariff items")
+
+        # HS 코드 상속 (같은 case_number의 다른 문서에서)
+        if issuing_country == "United States":
+            inherited = self.inherit_hs_codes_for_usa(doc_id)
+            if inherited > 0:
+                print(f"  ✓ Inherited {inherited} HS codes from related documents")
+
         return True
+
+    def inherit_hs_codes_for_usa(self, doc_id: int) -> int:
+        """
+        미국 문서: 같은 case_number를 가진 문서에서 HS 코드 상속
+
+        예: USA_Plate_A-580-887_Pre_2023.pdf (HS 코드 없음)
+            → USA_Plate_A-580-887_F_2022.pdf (HS 코드 있음)에서 복사
+        """
+        # 현재 문서에서 null인 HS 코드가 있는 case_number 찾기
+        self.db.cursor.execute("""
+            SELECT DISTINCT case_number
+            FROM tariff_items
+            WHERE doc_id = ?
+              AND case_number IS NOT NULL
+              AND hs_code IS NULL
+        """, (doc_id,))
+
+        case_numbers = [row['case_number'] for row in self.db.cursor.fetchall()]
+
+        if not case_numbers:
+            return 0
+
+        total_inherited = 0
+
+        for case_number in case_numbers:
+            # 같은 case_number를 가진 다른 문서에서 HS 코드 찾기
+            self.db.cursor.execute("""
+                SELECT DISTINCT hs_code
+                FROM tariff_items
+                WHERE case_number = ?
+                  AND hs_code IS NOT NULL
+                  AND issuing_country = 'United States'
+            """, (case_number,))
+
+            hs_codes = [row['hs_code'] for row in self.db.cursor.fetchall()]
+
+            if not hs_codes:
+                continue
+
+            # 현재 문서의 null HS 코드 항목들 가져오기
+            self.db.cursor.execute("""
+                SELECT tariff_id, country, company, tariff_rate
+                FROM tariff_items
+                WHERE doc_id = ?
+                  AND case_number = ?
+                  AND hs_code IS NULL
+            """, (doc_id, case_number))
+
+            null_items = self.db.cursor.fetchall()
+
+            # 각 HS 코드에 대해 새로운 항목 생성
+            for null_item in null_items:
+                # 기존 null 항목 정보
+                tariff_id = null_item['tariff_id']
+                country = null_item['country']
+                company = null_item['company']
+                tariff_rate = null_item['tariff_rate']
+
+                # 첫 번째 HS 코드로 기존 항목 업데이트
+                if hs_codes:
+                    self.db.cursor.execute("""
+                        UPDATE tariff_items
+                        SET hs_code = ?
+                        WHERE tariff_id = ?
+                    """, (hs_codes[0], tariff_id))
+                    total_inherited += 1
+
+                    # 나머지 HS 코드들은 새로운 항목으로 추가
+                    for hs_code in hs_codes[1:]:
+                        self.db.cursor.execute("""
+                            INSERT INTO tariff_items (
+                                doc_id, issuing_country, country, hs_code,
+                                tariff_type, tariff_rate, company, case_number,
+                                effective_date_from, effective_date_to,
+                                investigation_period_from, investigation_period_to,
+                                basis_law, product_description, note
+                            )
+                            SELECT
+                                doc_id, issuing_country, country, ?,
+                                tariff_type, tariff_rate, company, case_number,
+                                effective_date_from, effective_date_to,
+                                investigation_period_from, investigation_period_to,
+                                basis_law, product_description, note
+                            FROM tariff_items
+                            WHERE tariff_id = ?
+                        """, (hs_code, tariff_id))
+                        total_inherited += 1
+
+        self.db.conn.commit()
+        return total_inherited
 
     def process_folder(self, input_folder: str):
         """폴더의 모든 PDF 처리"""
@@ -159,9 +256,9 @@ def main():
     parser.add_argument(
         '--mode',
         type=str,
-        choices=['ocr', 'vision'],
-        default='ocr',
-        help='Processing mode: ocr (low cost) or vision (high accuracy)'
+        choices=['ocr', 'vision', 'hybrid'],
+        default='hybrid',
+        help='Processing mode: ocr (low cost), vision (high accuracy), or hybrid (auto fallback, default)'
     )
     parser.add_argument(
         '--reprocess',

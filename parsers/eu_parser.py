@@ -77,7 +77,41 @@ OUTPUT JSON FORMAT:
 
 
 # ============================================================================
+# 하이브리드 파서 (텍스트 → 실패 시 Vision 폴백)
+# ============================================================================
+class EUHybridParser(DefaultTextParser):
+    """EU 문서: 텍스트 파서 먼저 → 실패 시 Vision 폴백"""
+
+    def __init__(self, client):
+        super().__init__(client)
+        self._vision = EUVisionParser(client)
+
+    def process(self, pdf_path: str):
+        print("  [Hybrid] Trying TEXT parser first...")
+        try:
+            text_items = super().process(pdf_path)
+        except Exception as e:
+            print(f"  ✗ TEXT parser crashed: {e}")
+            text_items = []
+
+        # 텍스트 파서 성공 시 그대로 반환
+        if text_items:
+            print(f"  ✓ TEXT parser success: {len(text_items)} items")
+            return text_items
+
+        # 실패 시 Vision 폴백
+        print("  ⚠ TEXT parser failed → Switching to VISION parser...")
+        try:
+            vision_items = self._vision.process(pdf_path)
+            print(f"  ✓ VISION parser success: {len(vision_items)} items")
+            return vision_items
+        except Exception as e:
+            print(f"  ✗ Vision parser also failed: {e}")
+            return []
+
+
+# ============================================================================
 # 기본 export (하위 호환성)
 # ============================================================================
 
-EUParser = EUTextParser
+EUParser = EUHybridParser

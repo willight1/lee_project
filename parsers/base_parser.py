@@ -8,9 +8,44 @@ import json
 import base64
 import io
 import fitz  # PyMuPDF
-from typing import Dict, List, Tuple
+from typing import Dict, List, Tuple, Optional
 from openai import OpenAI
 from PIL import Image, ImageEnhance, ImageFilter
+
+
+def normalize_case_number(case_number: Optional[str]) -> Optional[str]:
+    """
+    케이스 넘버 정규화
+    - 엔대시(–)를 하이픈(-)으로 변경
+    - 공백 제거
+    - 여러 케이스 넘버가 있으면 첫 번째만 추출
+    - 유효한 형식인지 검증 (A-XXX-XXX 또는 C-XXX-XXX만 허용)
+    - Court Number (22-XXXXX) 등은 제외
+    """
+    if not case_number or case_number == "null":
+        return None
+
+    # 문자열로 변환
+    case_str = str(case_number).strip()
+
+    # 엔대시(–, U+2013)를 하이픈(-, U+002D)으로 변경
+    case_str = case_str.replace('–', '-')
+    case_str = case_str.replace('—', '-')  # em dash도 처리
+
+    # 여러 케이스 넘버가 쉼표나 세미콜론으로 구분되어 있으면 첫 번째만 추출
+    if ',' in case_str or ';' in case_str:
+        case_str = re.split(r'[,;]', case_str)[0].strip()
+
+    # 공백 제거
+    case_str = case_str.replace(' ', '')
+
+    # 유효한 케이스 넘버 형식 검증
+    # 미국: A-XXX-XXX (Antidumping) 또는 C-XXX-XXX (Countervailing) 형식만 허용
+    # Court Number (22-XXXXX), 기타 형식은 제외
+    if not re.match(r'^[AC]-\d{3}-\d{3}$', case_str, re.IGNORECASE):
+        return None
+
+    return case_str
 
 # Vision API 설정
 BATCH_PAGE_LIMIT = 10  # 한 번에 처리할 최대 페이지 수
@@ -45,7 +80,8 @@ class TextBasedParser:
                             "content": (
                                 "You are a precise data extraction assistant. "
                                 "Always output complete, valid JSON only. "
-                                "Extract ALL information accurately."
+                                "Extract ALL information accurately. "
+                                "IMPORTANT: Always close all JSON strings and objects properly."
                             )
                         },
                         {
@@ -53,7 +89,7 @@ class TextBasedParser:
                             "content": f"{prompt}\n\n[DOCUMENT TEXT]\n{text}"
                         }
                     ],
-                    max_tokens=16000,
+                    max_completion_tokens=16000,
                     temperature=0.1
                 )
 
@@ -102,6 +138,12 @@ class TextBasedParser:
         try:
             data = json.loads(response)
             items = data.get('items', [])
+
+            # 케이스 넘버 정규화
+            for item in items:
+                if 'case_number' in item:
+                    item['case_number'] = normalize_case_number(item['case_number'])
+
             print(f"    ✓ Parsed {len(items)} items successfully")
             return items
         except json.JSONDecodeError as e:
@@ -122,7 +164,7 @@ class VisionBasedParser:
 
     def __init__(self, client: OpenAI):
         self.client = client
-        self.model_name = "gpt-4o"  # Vision 모델
+        self.model_name = "gpt-4o-mini"  # Vision 모델 (gpt-4o 접근 불가시 폴백)
 
     def enhance_image(self, img_bytes: bytes) -> bytes:
         """이미지 품질 향상 (선명도, 대비)"""
@@ -292,6 +334,12 @@ class VisionBasedParser:
         try:
             data = json.loads(response)
             items = data.get('items', [])
+
+            # 케이스 넘버 정규화
+            for item in items:
+                if 'case_number' in item:
+                    item['case_number'] = normalize_case_number(item['case_number'])
+
             print(f"    ✓ Parsed {len(items)} items successfully")
             return items
         except json.JSONDecodeError as e:
