@@ -105,7 +105,7 @@ class TextBasedParser:
         return ""
 
     def parse_response(self, response: str) -> List[Dict]:
-        """JSON 파싱"""
+        """JSON 파싱 - 잘린 JSON 복구 지원"""
         if not response:
             return []
 
@@ -135,6 +135,69 @@ class TextBasedParser:
         # 콤마 정리
         response = re.sub(r',(\s*[}\]])', r'\1', response)
 
+        # JSON 복구 시도 (잘린 JSON 처리)
+        def try_repair_json(text: str) -> str:
+            """잘린 JSON을 복구 시도"""
+            import copy
+            repaired = text
+            
+            # 1. 마지막 완전한 객체 찾기 (items 배열 내)
+            # items 배열에서 마지막 완전한 객체까지만 추출
+            last_complete_obj = repaired.rfind('},')
+            if last_complete_obj == -1:
+                last_complete_obj = repaired.rfind('}')
+            
+            if last_complete_obj != -1:
+                # 마지막 완전한 객체 이후 불완전한 부분 제거 시도
+                potential = repaired[:last_complete_obj + 1]
+                
+                # 닫히지 않은 배열과 객체 닫기
+                open_braces = potential.count('{') - potential.count('}')
+                open_brackets = potential.count('[') - potential.count(']')
+                
+                if open_brackets > 0:
+                    potential += ']' * open_brackets
+                if open_braces > 0:
+                    potential += '}' * open_braces
+                
+                try:
+                    json.loads(potential)
+                    return potential
+                except:
+                    pass
+            
+            # 2. 열린 문자열 닫기
+            # 마지막 열린 따옴표 찾기
+            in_string = False
+            escape_next = False
+            for i, char in enumerate(repaired):
+                if escape_next:
+                    escape_next = False
+                    continue
+                if char == '\\':
+                    escape_next = True
+                    continue
+                if char == '"':
+                    in_string = not in_string
+            
+            if in_string:
+                # 문자열이 닫히지 않음 - 닫아주기
+                repaired = repaired + '"'
+            
+            # 3. 괄호 균형 맞추기
+            open_braces = repaired.count('{') - repaired.count('}')
+            open_brackets = repaired.count('[') - repaired.count(']')
+            
+            # 마지막 쉼표 제거
+            repaired = re.sub(r',\s*$', '', repaired)
+            
+            if open_brackets > 0:
+                repaired += ']' * open_brackets
+            if open_braces > 0:
+                repaired += '}' * open_braces
+            
+            return repaired
+
         try:
             data = json.loads(response)
             items = data.get('items', [])
@@ -148,7 +211,26 @@ class TextBasedParser:
             return items
         except json.JSONDecodeError as e:
             print(f"  ⚠ JSON decode error: {e}")
-            return []
+            print(f"  🔧 Attempting JSON repair...")
+            
+            # JSON 복구 시도
+            repaired = try_repair_json(response)
+            try:
+                data = json.loads(repaired)
+                items = data.get('items', [])
+                
+                # 케이스 넘버 정규화
+                for item in items:
+                    if 'case_number' in item:
+                        item['case_number'] = normalize_case_number(item['case_number'])
+                
+                print(f"    ✓ JSON repaired! Parsed {len(items)} items successfully")
+                return items
+            except json.JSONDecodeError as e2:
+                print(f"  ✗ JSON repair failed: {e2}")
+                # 디버깅용: 마지막 500자 출력
+                print(f"  📋 Last 500 chars of response: ...{response[-500:]}")
+                return []
 
     def create_extraction_prompt(self) -> str:
         """추출 프롬프트 (서브클래스에서 구현)"""

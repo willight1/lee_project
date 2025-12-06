@@ -7,9 +7,9 @@ from openai import OpenAI
 from .base_parser import TextBasedParser, VisionBasedParser
 from .default_parser import DefaultTextParser
 from .usa_parser import USATextParser, USAVisionParser, USAHybridParser
-from .eu_parser import EUTextParser, EUVisionParser, EUHybridParser
+from .eu_parser import EUTextParser, EUVisionParser
 from .malaysia_parser import MalaysiaTextParser, MalaysiaVisionParser, MalaysiaHybridParser
-from .australia_parser import AustraliaTextParser, AustraliaVisionParser, AustraliaHybridParser
+from .australia_parser import AustraliaTextParser, AustraliaVisionParser
 from .brazil_parser import BrazilParser
 from .india_parser import IndiaParser
 from .canada_parser import CanadaParser
@@ -60,10 +60,7 @@ class ParserFactory:
             if mode == "vision":
                 print("  Using EU Vision Parser")
                 return EUVisionParser(client)
-            elif mode == "hybrid":
-                print("  Using EU Hybrid Parser (Text → Vision Fallback)")
-                return EUHybridParser(client)
-            else:  # ocr
+            else:  # ocr or hybrid
                 print("  Using EU Text Parser (OCR)")
                 return EUTextParser(client)
 
@@ -82,10 +79,7 @@ class ParserFactory:
             if mode == "vision":
                 print("  Using Australia Vision Parser")
                 return AustraliaVisionParser(client)
-            elif mode == "hybrid":
-                print("  Using Australia Hybrid Parser (Text → Vision Fallback)")
-                return AustraliaHybridParser(client)
-            else:  # ocr
+            else:  # ocr or hybrid
                 print("  Using Australia Text Parser (OCR)")
                 return AustraliaTextParser(client)
 
