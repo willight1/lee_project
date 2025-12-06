@@ -2,10 +2,10 @@
 
 PDF에서 관세 데이터를 추출하여 SQLite 데이터베이스에 저장하는 시스템입니다.
 
-## ⭐ 최신 버전: v3 (모듈화된 국가별 파서)
+## ⭐ 최신 버전:  (모듈화된 국가별 파서)
 
 **주요 개선사항**:
-- 🔥 **고비용 고정확도 모드** - GPT-4o + 300 DPI + 이미지 전처리
+- - GPT-4o + 300 DPI + 이미지 전처리
 - 국가별 전용 파서 (USA, Malaysia, EU)
 - USA 파서: 국가별 분리 처리로 대용량 데이터 처리
 - 개선된 DB 스키마 (issuing_country, investigation_period, product_description)
@@ -14,19 +14,35 @@ PDF에서 관세 데이터를 추출하여 SQLite 데이터베이스에 저장�
 ## 프로젝트 구조
 
 ```
-lee_test1/
-├── parsers/                      # 국가별 파서 모듈 ⭐ NEW
-│   ├── __init__.py
+lee_pro/
+├── parsers/                      # 국가별 파서 모듈
+│   ├── __init__.py              # 파서 모듈 초기화
 │   ├── base_parser.py           # 기본 파서 클래스
+│   ├── parser_factory.py        # 파서 자동 선택 팩토리
 │   ├── usa_parser.py            # USA 전용 (국가별 분리 처리)
 │   ├── malaysia_parser.py       # Malaysia 전용
 │   ├── eu_parser.py             # EU 전용
+│   ├── australia_parser.py      # Australia 전용
+│   ├── pakistan_parser.py       # Pakistan 전용
 │   ├── default_parser.py        # 기타 국가용
-│   └── factory.py               # 파서 자동 선택
-├── database.py                  # DB 관리 모듈 ⭐ NEW
-├── tariff_extractor_v3.py       # 메인 실행 파일 ⭐ USE THIS
-├── PDF/                         # PDF 입력 폴더
-└── tariff_data.db              # SQLite DB (자동 생성)
+│   ├── brazil_parser.py         # Brazil 전용 (placeholder)
+│   ├── canada_parser.py         # Canada 전용 (placeholder)
+│   ├── india_parser.py          # India 전용 (placeholder)
+│   └── turkey_parser.py         # Turkey 전용 (placeholder)
+├── PDF/                         # PDF 입력 폴더 (24개 PDF 파일)
+│   ├── USA_*.pdf                # USA 관련 문서들
+│   ├── MALAYSIA_*.pdf           # Malaysia 관련 문서들
+│   ├── EU_*.pdf                 # EU 관련 문서들
+│   ├── AUSTRALIA_*.pdf          # Australia 관련 문서들
+│   └── PAKISTAN_*.pdf           # Pakistan 관련 문서들
+├── database.py                  # DB 관리 모듈
+├── tariff_extractor.py          # 메인 실행 파일 ⭐ USE THIS
+├── streamlit_app.py             # Streamlit 웹 대시보드 ⭐ NEW
+├── tariff_data.db               # SQLite DB (자동 생성)
+├── requirements.txt             # Python 의존성 패키지
+├── .env                         # 환경 변수 (API 키)
+├── .gitignore                   # Git 무시 파일
+└── README.md                    # 프로젝트 문서
 ```
 
 ## ⚖️ 밸런스 모드 (현재 설정)
@@ -43,8 +59,6 @@ lee_test1/
 **정확도**: 98% (대부분의 문서에 충분)
 **속도**: 7-8분 (빠름)
 
-📖 자세한 내용: [BALANCED_MODE.md](./BALANCED_MODE.md)
-📖 더 높은 정확도 필요 시: [HIGH_ACCURACY_MODE.md](./HIGH_ACCURACY_MODE.md)
 
 ## 빠른 시작
 
@@ -59,11 +73,123 @@ pip install Pillow  # 이미지 전처리용
 # OPENAI_API_KEY=your_api_key_here
 
 # 4. 모든 PDF 처리 (고정확도 모드)
-python tariff_extractor_v3.py
+python tariff_extractor.py
 
 # 5. 특정 파일만
-python tariff_extractor_v3.py --file=USA_HR_Countervailing_C-580-884_2016.pdf
+python tariff_extractor.py --file=USA_HR_Countervailing_C-580-884_2016.pdf
+
+# 6. Streamlit 웹 대시보드 실행
+streamlit run streamlit_app.py
 ```
+
+## 실행 명령어
+
+### 기본 실행
+```bash
+# 모든 PDF 처리 (hybrid 모드 - 기본값)
+python tariff_extractor.py
+
+# 특정 파일만 처리
+python tariff_extractor.py --file=USA_HR_Countervailing_C-580-884_2016.pdf
+
+# 재처리 (기존 데이터 삭제 후 다시 추출)
+python tariff_extractor.py --file=파일명.pdf --reprocess
+```
+
+### 모드 선택
+```bash
+# OCR 모드 (텍스트 추출 - 저비용)
+python tariff_extractor.py --mode=ocr
+
+# Vision 모드 (이미지 분석 - 고정확도)
+python tariff_extractor.py --mode=vision
+
+# Hybrid 모드 (OCR → Vision 폴백, 기본값)
+python tariff_extractor.py --mode=hybrid
+```
+
+### 국가별 파일 처리 예시
+```bash
+# USA 문서 처리
+python tariff_extractor.py --file=USA_CR_Antidumping_A-580-881.pdf
+
+# Malaysia 문서 처리
+python tariff_extractor.py --file=MALAYSIA_Coated_Antidumping.pdf
+
+# EU 문서 처리
+python tariff_extractor.py --file=EU_GO_Antidumping_AD608_R728.pdf
+
+# Australia 문서 처리
+python tariff_extractor.py --file=AUSTRALIA_Zinc_Coated_Antidumping_ADN_2023_035.pdf
+
+# Pakistan 문서 처리
+python tariff_extractor.py --file=PAKISTAN_CR_Antidumping_A.D.C_No._60.pdf
+```
+
+## 파서 구조 설명
+
+### 📁 메인 실행 파일 vs 개별 파서
+
+| 구분 | 파일 | 역할 |
+|------|------|------|
+| **메인 실행** | `tariff_extractor.py` | PDF 폴더 순회, 파서 자동 선택, DB 저장 |
+| **파서 팩토리** | `parsers/parser_factory.py` | 파일명 기반 적절한 파서 자동 선택 |
+| **기본 파서** | `parsers/base_parser.py` | 공통 로직 (LLM 호출, JSON 파싱) |
+| **국가별 파서** | `parsers/*_parser.py` | 국가별 특수 추출 로직 |
+
+### 🔄 동작 방식
+
+```
+tariff_extractor.py (메인)
+    ↓
+ParserFactory.create_parser(파일명)
+    ↓ (파일명에서 국가 감지)
+USA_*.pdf → USAParser
+MALAYSIA_*.pdf → MalaysiaParser
+EU_*.pdf → EUParser
+...
+    ↓
+국가별 파서가 PDF 처리 후 데이터 반환
+    ↓
+tariff_extractor.py가 DB에 저장
+```
+
+> ⚠️ **참고**: 개별 파서(`parsers/*.py`)는 단독 실행되지 않습니다.  
+> 모든 처리는 `tariff_extractor.py`를 통해 이루어지며, `--file=` 옵션으로 특정 파일을 지정할 수 있습니다.
+
+### ❓ 왜 파일을 분리했는가? (모듈화의 장점)
+
+개별 파서는 단독 실행되지 않는데, 왜 굳이 파일을 분리했을까요?
+
+#### 1️⃣ 유지보수 용이성
+
+| 구분 | 파일 분리 ✅ | 하나의 파일 ❌ |
+|------|-------------|---------------|
+| **수정 범위** | 해당 국가 파서만 수정 | 전체 코드에서 찾아야 함 |
+| **위험성** | 다른 국가에 영향 없음 | 실수로 다른 로직 건드리면 고장 |
+
+#### 2️⃣ 확장성
+
+| 구분 | 파일 분리 ✅ | 하나의 파일 ❌ |
+|------|-------------|---------------|
+| **새 국가 추가** | 새 Parser 만들고 Factory에 등록하면 끝 | 복잡도가 계속 증가 |
+| **예시** | `japan_parser.py` 생성 → 완료 | 3000줄+ 파일에 코드 추가 |
+
+#### 3️⃣ 협업 효율 증가
+
+| 구분 | 파일 분리 ✅ | 하나의 파일 ❌ |
+|------|-------------|---------------|
+| **동시 작업** | 각각 다른 파일 수정 → 충돌 최소화 | A가 USA 수정, B가 EU 수정 → 충돌 빈번 |
+| **Git 관리** | 변경 이력 명확 | 누가 어디를 수정했는지 파악 어려움 |
+
+#### 4️⃣ 가독성
+
+| 구분 | 파일 분리 ✅ | 하나의 파일 ❌ |
+|------|-------------|---------------|
+| **역할 파악** | 파일명만 봐도 역할 파악 가능 | 스크롤 지옥 |
+| **예시** | `usa_parser.py` = USA 처리 | 수천 줄에서 원하는 코드 찾기 |
+
+> 💡 이러한 설계 방식을 **"관심사의 분리 (Separation of Concerns)"** 또는 **모듈화(Modularization)** 패턴이라고 합니다.
 
 ## 국가별 파서 특징
 
@@ -98,18 +224,18 @@ python tariff_extractor_v3.py --file=USA_HR_Countervailing_C-580-884_2016.pdf
 CREATE TABLE tariff_items (
     tariff_id INTEGER PRIMARY KEY,
     doc_id INTEGER,
-    country TEXT,                    -- 대상 국가 (수출국)
+    country TEXT,             
     hs_code TEXT,
     tariff_type TEXT,
     tariff_rate REAL,
     effective_date_from TEXT,
     effective_date_to TEXT,
-    investigation_period_from TEXT,  -- ⭐ NEW
-    investigation_period_to TEXT,    -- ⭐ NEW
+    investigation_period_from TEXT,  
+    investigation_period_to TEXT,    
     basis_law TEXT,
     company TEXT,
     case_number TEXT,
-    product_description TEXT,        -- ⭐ NEW
+    product_description TEXT,      
     note TEXT
 );
 ```
@@ -183,26 +309,20 @@ class BrazilParser(BaseCountryParser):
 
 ```bash
 # 특정 파일 테스트
-python tariff_extractor_v3.py --file=파일명.pdf
+python tariff_extractor.py --file=파일명.pdf
 
 # 재처리 (기존 데이터 삭제)
-python tariff_extractor_v3.py --file=파일명.pdf --reprocess
+python tariff_extractor.py --file=파일명.pdf --reprocess
 ```
 
-## 파일 정리 (기존 버전)
+## 주요 파일 설명
 
-### 🗑️ 삭제 예정
-- `data_pdf.py` - v0 (초기 버전)
-- `tariff_extractor.py` - v1
-- `tariff_extractor_v2.py` - v2
-- `trade_remedy.db` - 구 DB
-- `tariff_data_old.db` - 백업
-
-### ✅ 현재 사용
-- `tariff_extractor_v3.py` ⭐
-- `parsers/` 폴더 ⭐
-- `database.py` ⭐
-- `tariff_data.db` ⭐
+### ✅ 핵심 파일
+- `tariff_extractor.py` ⭐ - PDF에서 관세 데이터 추출 메인 실행 파일
+- `streamlit_app.py` ⭐ - 웹 기반 데이터 조회 대시보드
+- `database.py` ⭐ - SQLite 데이터베이스 관리 모듈
+- `parsers/` ⭐ - 국가별 파서 모듈 폴더
+- `tariff_data.db` ⭐ - 추출된 관세 데이터 저장 DB
 
 ## 문제 해결
 
@@ -232,4 +352,3 @@ python tariff_extractor_v3.py --file=파일명.pdf 2>&1 | tee log.txt
 
 ---
 
-**Made with ❤️ using Claude Code & Modular Architecture**
