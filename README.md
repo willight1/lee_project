@@ -5,7 +5,7 @@ PDF에서 관세 데이터를 추출하여 SQLite 데이터베이스에 저장�
 ## ⭐ 최신 버전:  (모듈화된 국가별 파서)
 
 **주요 개선사항**:
-- - GPT-4o + 300 DPI + 이미지 전처리
+- GPT-4o + 300 DPI + 이미지 전처리
 - 국가별 전용 파서 (USA, Malaysia, EU)
 - USA 파서: 국가별 분리 처리로 대용량 데이터 처리
 - 개선된 DB 스키마 (issuing_country, investigation_period, product_description)
@@ -209,6 +209,16 @@ tariff_extractor.py가 DB에 저장
 - **정확한 회사명**: "OJSC Novolipetsk Steel"
 - **5개 국가**: China, Japan, Korea, Russia, USA
 
+### 🇦🇺 Australia Parser
+- **Vision API 기반**: 이미지 분석으로 테이블 추출
+- **ADN 케이스 번호**: ADN 2023/035 형식 추출
+- **Zinc Coated Steel 제품** 전용 처리
+
+### 🇵🇰 Pakistan Parser
+- **A.D.C 케이스 번호**: A.D.C No. 60 형식 추출
+- **다중 국가 지원**: Chinese Taipei, EU, South Korea, Vietnam
+- **HS 코드와 국가 Cartesian Product** 처리
+
 ## 데이터베이스 스키마
 
 ### 주요 개선 필드
@@ -330,7 +340,7 @@ python tariff_extractor.py --file=파일명.pdf --reprocess
 ```bash
 # .env 파일 확인
 cat .env
-# ANTHROPIC_API_KEY=sk-ant-...
+# OPENAI_API_KEY=sk-ant-...
 ```
 
 ### JSON 파싱 오류
@@ -352,3 +362,32 @@ python tariff_extractor_v3.py --file=파일명.pdf 2>&1 | tee log.txt
 
 ---
 
+## ⚠️ 보완사항
+
+### 국가명 통일 필요
+
+현재 각 국가별 파서에서 추출되는 국가명이 서로 다르게 저장되어 있어 통일 작업이 필요합니다.
+
+| 국가 | 현재 저장된 값 예시 |
+|------|--------------------|
+| 🇦🇺 Australia | `Korea` |
+| 🇲🇾 Malaysia | `The Republic of Korea` |
+| 🇺🇸 USA | `Republic of Korea` |
+| 🇪🇺 EU | `Korea` |
+| 🇵🇰 Pakistan | `South Korea` |
+
+**개선 방안**:
+1. 데이터 정규화 함수 추가 (`normalize_country_name`)
+2. DB 저장 시 통일된 국가명으로 변환
+3. 기존 데이터 마이그레이션 스크립트 작성
+
+```python
+# 예시: 국가명 정규화 매핑
+COUNTRY_NAME_MAP = {
+    "Korea": "Republic of Korea",
+    "The Republic of Korea": "Republic of Korea",
+    "South Korea": "Republic of Korea",
+    "ROK": "Republic of Korea",
+    # ... 기타 국가
+}
+```
