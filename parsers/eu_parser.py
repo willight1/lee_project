@@ -15,7 +15,46 @@ from .base_parser import VisionBasedParser
 # ============================================================================
 
 class EUTextParser(DefaultTextParser):
-    """유럽연합 특화 파서 - OCR 버전 (HS 코드 정규화 포함)"""
+    """유럽연합 특화 파서 - OCR 버전 (ANTI-DUMPING MEASURES 섹션만 사용, MIP 처리)"""
+
+    def extract_measures_section(self, text: str) -> str:
+        """7. ANTI-DUMPING MEASURES 섹션만 추출"""
+        patterns = [
+            r'7\.?\s*ANTI-DUMPING\s+MEASURES',
+            r'DEFINITIVE\s+ANTI-DUMPING\s+MEASURES',
+            r'Article\s+1\s*\n',
+        ]
+        
+        for pattern in patterns:
+            match = re.search(pattern, text, re.IGNORECASE)
+            if match:
+                measures_text = text[match.start():]
+                # 30000자 제한
+                if len(measures_text) > 30000:
+                    measures_text = measures_text[:30000]
+                print(f"    📝 Extracted MEASURES section ({len(measures_text):,} chars)")
+                return measures_text
+        
+        print(f"    ⚠ ANTI-DUMPING MEASURES section not found, using last 30000 chars")
+        return text[-30000:]
+
+    def extract_mip_info(self, text: str) -> Optional[str]:
+        """Minimum Import Price 정보 추출"""
+        mip_patterns = [
+            r'MIPs?\s+(?:currently\s+)?(?:in\s+force\s+)?(?:range\s+)?(?:between\s+)?[\d,\s]+EUR[^.]*',
+            r'minimum\s+import\s+price[s]?\s*(?:of)?\s*[\d,\s]+EUR[^.]*',
+            r'MIP\s*\([^)]*EUR[^)]*\)',
+        ]
+        
+        for pattern in mip_patterns:
+            match = re.search(pattern, text, re.IGNORECASE)
+            if match:
+                mip_text = match.group().strip()
+                # 너무 길면 자르기
+                if len(mip_text) > 150:
+                    mip_text = mip_text[:150] + "..."
+                return mip_text
+        return None
 
     def normalize_hs_code(self, hs_code: str) -> str:
         """HS 코드를 XXXX.XX.XX 형식으로 정규화 (ex 제거, 공백 제거)"""
@@ -39,8 +78,8 @@ class EUTextParser(DefaultTextParser):
         formatted = f"{digits[:4]}.{digits[4:6]}.{digits[6:8]}"
         return formatted
 
-    def post_process_items(self, items: List[Dict]) -> List[Dict]:
-        """추출된 아이템들에 대한 HS 코드 후처리"""
+    def post_process_items(self, items: List[Dict], mip_info: str = None) -> List[Dict]:
+        """추출된 아이템들에 대한 HS 코드 후처리 및 MIP 정보 추가"""
         processed_items = []
         
         for item in items:
@@ -55,19 +94,78 @@ class EUTextParser(DefaultTextParser):
                     print(f"    ⚠ Skipping invalid HS code: {hs_code}")
                     continue
             
+            # MIP 정보 추가 (note가 비어있는 경우에만)
+            if mip_info and not item.get('note'):
+                item['note'] = f"MIP: {mip_info}"
+            
             processed_items.append(item)
         
         return processed_items
 
     def process(self, pdf_path: str) -> List[Dict]:
-        """PDF 처리 및 HS 코드 후처리"""
-        # 부모 클래스의 process 호출
-        items = super().process(pdf_path)
+        """PDF 처리: ANTI-DUMPING MEASURES 섹션만 추출 후 파싱"""
+        from .default_parser import extract_text_from_pdf
         
-        # 후처리 적용
-        processed_items = self.post_process_items(items)
+        # 1. 텍스트 추출
+        text = extract_text_from_pdf(pdf_path)
         
-        print(f"  📝 After HS code normalization: {len(processed_items)} items")
+        if not text or len(text) < 100:
+            print(f"  💡 Text extraction failed, switching to Vision API")
+            return self.process_image_pdf_with_vision(pdf_path)
+        
+        # 2. MIP 정보 추출 (전체 텍스트에서)
+        mip_info = self.extract_mip_info(text)
+        if mip_info:
+            print(f"    📝 Found MIP: {mip_info[:80]}...")
+        
+        # 3. MEASURES 섹션만 추출
+        measures_text = self.extract_measures_section(text)
+        
+        # 4. 텍스트가 너무 길면 배치로 나누기
+        max_chars = 100000
+        all_items = []
+
+        if len(measures_text) > max_chars:
+            print(f"  📊 Text too long ({len(measures_text):,} chars), splitting into batches...")
+            pages = measures_text.split("\n--- PAGE ")
+            batch_text = ""
+            batch_num = 1
+
+            for page in pages:
+                if not page.strip():
+                    continue
+                page_text = "--- PAGE " + page if batch_text else page
+                if len(batch_text) + len(page_text) > max_chars:
+                    print(f"  ▶ Processing batch {batch_num} ({len(batch_text):,} chars)...")
+                    prompt = self.create_extraction_prompt()
+                    response = self.parse_text_with_llm(batch_text, prompt)
+                    items = self.parse_response(response)
+                    all_items.extend(items)
+                    print(f"  ✓ Batch {batch_num}: {len(items)} items")
+                    batch_text = page_text
+                    batch_num += 1
+                else:
+                    batch_text += "\n" + page_text
+
+            if batch_text.strip():
+                print(f"  ▶ Processing batch {batch_num} ({len(batch_text):,} chars)...")
+                prompt = self.create_extraction_prompt()
+                response = self.parse_text_with_llm(batch_text, prompt)
+                items = self.parse_response(response)
+                all_items.extend(items)
+                print(f"  ✓ Batch {batch_num}: {len(items)} items")
+        else:
+            print(f"  ▶ Processing MEASURES section ({len(measures_text):,} chars)...")
+            prompt = self.create_extraction_prompt()
+            response = self.parse_text_with_llm(measures_text, prompt)
+            all_items = self.parse_response(response)
+
+        print(f"  ➜ Total items from all batches: {len(all_items)}")
+        
+        # 5. 후처리 (HS 코드 정규화, MIP 추가)
+        processed_items = self.post_process_items(all_items, mip_info)
+        
+        print(f"  📝 After post-processing: {len(processed_items)} items")
         return processed_items
 
 

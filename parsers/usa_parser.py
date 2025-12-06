@@ -41,8 +41,125 @@ def validate_usa_hs_code(hs_code) -> str:
 class USATextParser(DefaultTextParser):
     """미국 특화 텍스트 파서"""
 
+    def extract_hs_codes_from_pdf(self, pdf_path: str) -> set:
+        """PDF에서 모든 HS Code를 직접 추출 (72XX, 73XX로 시작하는 것만)"""
+        import fitz
+        all_hs_codes = set()
+        
+        try:
+            doc = fitz.open(pdf_path)
+            for page in doc:
+                text = page.get_text()
+                # 72XX 또는 73XX로 시작하는 HS 코드 찾기
+                hs_codes = re.findall(r'7[23]\d{2}\.\d{2}\.\d{2,4}', text)
+                all_hs_codes.update(hs_codes)
+            doc.close()
+        except Exception as e:
+            print(f"    ⚠ Error extracting HS codes from PDF: {e}")
+        
+        return all_hs_codes
+
+    def process(self, pdf_path: str) -> List[Dict]:
+        """
+        PDF 처리 후 모든 HS Code × 국가/회사 조합을 강제 생성
+        """
+        # 1. PDF에서 모든 HS Code 직접 추출
+        all_hs_codes = self.extract_hs_codes_from_pdf(pdf_path)
+        print(f"  📊 Found {len(all_hs_codes)} unique HS codes in PDF")
+        
+        # 2. 기본 파서로 LLM 추출 실행
+        items = super().process(pdf_path)
+        
+        if not items:
+            return items
+        
+        # 3. LLM에서 추출한 HS Code도 추가
+        for item in items:
+            if item.get('hs_code'):
+                validated = validate_usa_hs_code(item['hs_code'])
+                if validated:
+                    all_hs_codes.add(validated)
+        
+        # 4. HS Code가 하나도 없으면 원본 반환 (HS Code가 없는 문서)
+        if not all_hs_codes:
+            print(f"  📊 No HS codes found, returning original {len(items)} items")
+            # 중복만 제거하고 반환
+            return self._deduplicate_items(items)
+        
+        # 5. 국가/회사별 정보 수집
+        country_company_info = {}
+        for item in items:
+            country = item.get('country')
+            company = item.get('company')
+            
+            if not country:
+                continue
+            
+            key = (country, company)
+            if key not in country_company_info:
+                country_company_info[key] = {
+                    'tariff_rate': item.get('tariff_rate'),
+                    'tariff_type': item.get('tariff_type'),
+                    'effective_date_from': item.get('effective_date_from'),
+                    'effective_date_to': item.get('effective_date_to'),
+                    'investigation_period_from': item.get('investigation_period_from'),
+                    'investigation_period_to': item.get('investigation_period_to'),
+                    'basis_law': item.get('basis_law'),
+                    'case_number': item.get('case_number'),
+                    'product_description': item.get('product_description'),
+                    'note': item.get('note'),
+                }
+        
+        print(f"  📊 Found {len(country_company_info)} unique country/company combinations")
+        
+        # 6. Cartesian product 생성: 모든 HS Code × 모든 국가/회사
+        complete_items = []
+        for hs_code in sorted(all_hs_codes):
+            for (country, company), info in country_company_info.items():
+                complete_items.append({
+                    'country': country,
+                    'company': company,
+                    'hs_code': hs_code,
+                    'tariff_type': info.get('tariff_type'),
+                    'tariff_rate': info.get('tariff_rate'),
+                    'effective_date_from': info.get('effective_date_from'),
+                    'effective_date_to': info.get('effective_date_to'),
+                    'investigation_period_from': info.get('investigation_period_from'),
+                    'investigation_period_to': info.get('investigation_period_to'),
+                    'basis_law': info.get('basis_law'),
+                    'case_number': info.get('case_number'),
+                    'product_description': info.get('product_description'),
+                    'note': info.get('note'),
+                })
+        
+        expected_count = len(all_hs_codes) * len(country_company_info)
+        print(f"  ✓ Generated {len(complete_items)} items ({len(all_hs_codes)} HS codes × {len(country_company_info)} country/company = {expected_count})")
+        
+        return complete_items
+
+    def _deduplicate_items(self, items: List[Dict]) -> List[Dict]:
+        """중복 제거"""
+        seen = set()
+        unique_items = []
+        for item in items:
+            # 중복 판단 키: hs_code, country, company, tariff_rate
+            key = (
+                item.get('hs_code'),
+                item.get('country'),
+                item.get('company'),
+                item.get('tariff_rate')
+            )
+            if key not in seen:
+                seen.add(key)
+                unique_items.append(item)
+        
+        if len(items) != len(unique_items):
+            print(f"    ✓ Removed {len(items) - len(unique_items)} duplicate items")
+        
+        return unique_items
+
     def parse_response(self, response: str) -> List[Dict]:
-        """JSON 파싱 + HS 코드 검증"""
+        """JSON 파싱 + HS 코드 검증 + 중복 제거"""
         items = super().parse_response(response)
 
         # HS 코드 검증 및 정리
@@ -59,7 +176,7 @@ class USATextParser(DefaultTextParser):
         if invalid_count > 0:
             print(f"    ✓ Filtered {invalid_count} invalid HS codes")
 
-        return items
+        return self._deduplicate_items(items)
 
     def create_extraction_prompt(self) -> str:
         return """Extract tariff/trade remedy information from the US document text.
@@ -76,8 +193,14 @@ class USATextParser(DefaultTextParser):
    - The date after this pattern is the tariff effective start date (effective_date_from)
    - Format as YYYY-MM-DD
 
-3. **Cash Deposit Rate:**
-   - If "Cash Deposit Rate" is mentioned in the document, add it to the note field
+3. **Cash Deposit Rate Table - EXTRACT ALL COMPANIES:**
+   - Look for "Cash Deposit Rate" table or section
+   - **EXTRACT EVERY SINGLE COMPANY listed in the table**
+   - Common companies include: Hyundai Steel Company, POSCO, Daewoo, All Others, etc.
+   - Each company row has a company name and a rate (percent)
+   - Create a SEPARATE item for EACH company with their specific rate
+   - **DO NOT SKIP ANY COMPANY** - even if names are long or contain multiple companies
+   - Example: "POSCO and Daewoo International Corporation" is ONE company entry
 
 4. **HS Code Extraction - VERY IMPORTANT:**
    - Some documents may NOT contain HS Code information
@@ -112,13 +235,16 @@ class USATextParser(DefaultTextParser):
    - If multiple countries are listed, create SEPARATE items for EACH country
    - DO NOT combine multiple countries into one item
 
-9. **Company Handling:**
-   - If multiple companies are listed, create separate items for each company
+9. **Company Handling - CRITICAL:**
+   - **Extract ALL companies from the Cash Deposit Rate table**
+   - Create a SEPARATE item for EACH company
+   - Include "All Others" or similar catch-all categories
+   - **Count the companies in the table and verify you extracted ALL of them**
 
 10. **US-Specific Data:**
-   - Extract case numbers (e.g., A-580-878, C-580-879) → put in "case_number" field
-   - Extract investigation periods
-   - Extract company-specific rates
+    - Extract case numbers (e.g., A-580-878, C-580-879) → put in "case_number" field
+    - Extract investigation periods
+    - Extract company-specific rates
 
 OUTPUT JSON FORMAT:
 
