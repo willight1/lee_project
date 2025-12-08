@@ -221,16 +221,14 @@ The table has these columns:
 1. **Measure → tariff_type:**
    - If Measure = "IDD" → tariff_type = "Antidumping"
    - If Measure = "ICD" → tariff_type = "Countervailing"
-   - If Measure = "IDD and ICD" → CREATE TWO SEPARATE ITEMS:
-     - One with tariff_type = "Antidumping"
-     - One with tariff_type = "Countervailing"
+   - If Measure = "IDD and ICD" → tariff_type = "Antidumping and Countervailing"
 
 2. **Measure type → note:**
    - Store the Measure type value (e.g., "Floor price", "Combination") in the note field
 
 **WHAT TO EXTRACT:**
 - Every row from the table
-- Each row = one or two JSON items (two if "IDD and ICD")
+- Each row = one JSON item
 - Include rows with 0%, N/A, or "nil" duty
 
 **OUTPUT FORMAT:**
