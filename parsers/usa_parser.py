@@ -183,6 +183,12 @@ class USATextParser(DefaultTextParser):
 
 **CRITICAL INSTRUCTIONS:**
 
+0. **IGNORE FOOTNOTES - VERY IMPORTANT:**
+   - DO NOT read or extract data from footnotes
+   - Footnotes are small text at the bottom of pages, often numbered (1, 2, 3...) or with symbols
+   - ONLY read the main body text and tables
+   - If a footnote contains company names, dates, or rates, IGNORE them
+
 1. **DEPARTMENT OF COMMERCE Section Parsing:**
    - Read from where "DEPARTMENT OF COMMERCE" title appears until the next "DEPARTMENT OF COMMERCE"
    - Check if the section is "Final Results" or "Preliminary Results" after "DEPARTMENT OF COMMERCE"
@@ -307,6 +313,12 @@ class USAVisionParser(VisionBasedParser):
         return """Extract tariff/trade remedy information from the US document images.
 
 **CRITICAL INSTRUCTIONS:**
+
+0. **IGNORE FOOTNOTES - VERY IMPORTANT:**
+   - DO NOT read or extract data from footnotes
+   - Footnotes are small text at the bottom of pages, often numbered (1, 2, 3...) or with symbols
+   - ONLY read the main body text and tables
+   - If a footnote contains company names, dates, or rates, IGNORE them
 
 1. **DEPARTMENT OF COMMERCE Section Parsing:**
    - Read from where "DEPARTMENT OF COMMERCE" title appears until the next "DEPARTMENT OF COMMERCE"
