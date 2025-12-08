@@ -252,6 +252,33 @@ class TariffExtractor:
         if normalized_count > 0:
             print(f"  🌍 Normalized {normalized_count} country names")
 
+        # tariff_rate 정규화 (문자열인 경우 note로 이동)
+        rate_normalized_count = 0
+        for item in items:
+            rate = item.get('tariff_rate')
+            if rate is not None:
+                # 이미 숫자인 경우 그대로 유지
+                if isinstance(rate, (int, float)):
+                    continue
+                # 문자열인 경우 숫자로 변환 시도
+                if isinstance(rate, str):
+                    rate_str = rate.strip()
+                    # 숫자만 추출 시도 (%, 공백 제거)
+                    cleaned = rate_str.replace('%', '').replace(',', '.').strip()
+                    try:
+                        item['tariff_rate'] = float(cleaned)
+                    except (ValueError, TypeError):
+                        # 변환 실패 시 note로 이동
+                        existing_note = item.get('note') or ''
+                        if existing_note:
+                            item['note'] = f"{existing_note}; Tariff: {rate_str}"
+                        else:
+                            item['note'] = f"Tariff: {rate_str}"
+                        item['tariff_rate'] = None
+                        rate_normalized_count += 1
+        if rate_normalized_count > 0:
+            print(f"  📊 Moved {rate_normalized_count} non-numeric tariff rates to note")
+
         # 페이지 수
         doc = fitz.open(pdf_path)
         total_pages = len(doc)

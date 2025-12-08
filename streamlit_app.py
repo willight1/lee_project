@@ -446,6 +446,12 @@ def main():
                 idx = df_display[df_display["선택"] == selected_item].index[0]
                 row = df.iloc[df.index.get_loc(idx)]
                 
+                # null/None/NaN 값을 빈 문자열로 변환하는 헬퍼 함수
+                def format_value(val):
+                    if val is None or (isinstance(val, float) and pd.isna(val)) or str(val).lower() == 'null':
+                        return None
+                    return val
+                
                 st.markdown("---")
                 
                 col1, col2 = st.columns(2)
@@ -457,28 +463,36 @@ def main():
                     
                     st.markdown("#### 📦 제품 정보")
                     st.write(f"**HS 코드:** {row['HS코드']}")
-                    st.write(f"**제품설명:** {row['제품설명'] or 'N/A'}")
+                    if format_value(row['제품설명']):
+                        st.write(f"**제품설명:** {row['제품설명']}")
                 
                 with col2:
                     st.markdown("#### 💰 관세 정보")
-                    st.write(f"**관세유형:** {row['관세유형']}")
-                    st.write(f"**관세율:** {row['관세율(%)']}%")
+                    if format_value(row['관세유형']):
+                        st.write(f"**관세유형:** {row['관세유형']}")
+                    if format_value(row['관세율(%)']):
+                        st.write(f"**관세율:** {row['관세율(%)']}%")
                     
                     st.markdown("#### 📅 기간 정보")
-                    st.write(f"**시행일(시작):** {row['시행일(시작)'] or 'N/A'}")
-                    st.write(f"**시행일(종료):** {row['시행일(종료)'] or 'N/A'}")
+                    if format_value(row['시행일(시작)']):
+                        st.write(f"**시행일(시작):** {row['시행일(시작)']}")
+                    if format_value(row['시행일(종료)']):
+                        st.write(f"**시행일(종료):** {row['시행일(종료)']}")
                 
                 # 추가 정보
                 st.markdown("#### 📝 추가 정보")
                 col1, col2, col3 = st.columns(3)
                 with col1:
-                    st.write(f"**회사명:** {row['회사명'] or 'N/A'}")
+                    if format_value(row['회사명']):
+                        st.write(f"**회사명:** {row['회사명']}")
                 with col2:
-                    st.write(f"**케이스번호:** {row['케이스번호'] or 'N/A'}")
+                    if format_value(row['케이스번호']):
+                        st.write(f"**케이스번호:** {row['케이스번호']}")
                 with col3:
-                    st.write(f"**법적근거:** {row['법적근거'] or 'N/A'}")
+                    if format_value(row['법적근거']):
+                        st.write(f"**법적근거:** {row['법적근거']}")
                 
-                if row['비고']:
+                if format_value(row['비고']):
                     st.info(f"💡 **비고:** {row['비고']}")
 
 

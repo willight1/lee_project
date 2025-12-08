@@ -102,49 +102,50 @@ class MalaysiaTextParser(DefaultTextParser):
         return processed
 
     def create_extraction_prompt(self) -> str:
-        return """Extract company and tariff rate information from the Malaysia ANTI-DUMPING DUTIES table.
+        return """Extract tariff information from the Malaysia Anti-Dumping document.
 
-**FOCUS ON EXTRACTING:**
-1. **Country** names
-2. **Company** names - including "Others" or "Other producers"
-3. **Tariff rates** (% or "Nil" = 0)
-4. **Effective date** - when the duty comes into effect
-5. **Legal basis** - P.U.(A) number from the document header
+**STEP 1: EXTRACT EFFECTIVE DATES**
+Look for "Citation and commencement" section:
+- Find "shall come into operation on" or "berkuat kuasa pada"
+- Extract the date as effective_date_from (format: YYYY-MM-DD)
+- If there's an end date, extract as effective_date_to
+
+**STEP 2: EXTRACT FROM SCHEDULE / ANTI-DUMPING DUTIES TABLE**
+The table has these columns:
+- (1) Heading No./Subheading → hs_code
+- (2) Description of goods → product_description
+- (3) Country → country
+- (4) Producer/Exporter → company (Roman numerals (i), (ii), (iii) are SEPARATE companies)
+- (5) Rate of Duties → tariff_rate (% or "Nil" = 0)
 
 **COMPANY EXTRACTION RULES:**
-- Roman numerals (i), (ii), (iii), (iv), (v) = SEPARATE companies
+- Roman numerals (i), (ii), (iii), (iv), (v) = SEPARATE companies, extract each one
 - "Others", "Other producers", "Lain-lain" = valid company, include it
-- Alphabetical markers (A), (B), (C) = notes, NOT companies
-
-**DATE EXTRACTION:**
-- Look for "tarikh kuatkuasa" or "effective date" in the document
-- Common format: "1 Januari 2023" or "1 January 2023"
-- Convert to YYYY-MM-DD format
+- Alphabetical markers (A), (B), (C) = notes/conditions, NOT companies
 
 **OUTPUT FORMAT:**
 {
+  "effective_date_from": "YYYY-MM-DD or null",
+  "effective_date_to": "YYYY-MM-DD or null",
   "items": [
     {
-      "country": "Country name",
-      "hs_code": null,
+      "country": "Country name from column (3)",
+      "hs_code": "Code from column (1)",
       "tariff_type": "Antidumping",
-      "tariff_rate": number (0 for Nil),
-      "effective_date_from": "YYYY-MM-DD or null",
-      "effective_date_to": null,
-      "basis_law": "P.U.(A) xxx/20xx",
-      "company": "Company name or Others",
-      "product_description": "Cold rolled steel coils/sheets or similar",
+      "tariff_rate": number from column (5) (0 for Nil),
+      "company": "Company name from column (4)",
+      "product_description": "Description from column (2)",
       "note": "(A), (B), (C) conditions if any"
     }
   ]
 }
 
 **CHECKLIST:**
-- [ ] Include ALL companies with (i), (ii), (iii), etc.
-- [ ] Include "Others" as a company
-- [ ] Convert "Nil" to 0
-- [ ] Extract P.U.(A) number as basis_law
-- [ ] Extract effective date if visible
+- [ ] Extract effective_date_from from "Citation and commencement"
+- [ ] Extract ALL HS codes from column (1)
+- [ ] Extract ALL companies including "Others"
+- [ ] Each company with (i), (ii), (iii) is a SEPARATE item
+- [ ] Convert "Nil" or "0%" to 0
 
 Output ONLY valid JSON.
 """
@@ -446,23 +447,21 @@ IMPORTANT:
 **CRITICAL - READ CAREFULLY:**
 
 This document has a TABLE structure where:
-- HS Codes appear in COLUMN HEADERS (column 1: "Heading/Subheading Number according to H.S. Code")
+- HS Codes appear in COLUMN (1): "Heading No./Subheading Number according to H.S. Code"
 - Companies and tariff rates appear in OTHER COLUMNS
 
-**STEP 1: FIRST, extract ALL HS Codes from the table header column**
-Look for codes like: XXXX.XX.XX XX (e.g., 7210.49.11 00, 7210.61.12 00)
-These appear in "(1) Heading/Subheading Number according to H.S. Code" column.
+**STEP 1: EXTRACT EFFECTIVE DATES**
+Look for "Citation and commencement" section:
+- Find "shall come into operation on" or "berkuat kuasa pada"
+- Extract date as effective_date_from (format: YYYY-MM-DD)
 
-**STEP 2: For EACH row, extract:**
-- Country (from column 2)
-- Company name (from column 4 - look for Roman numerals (i), (ii), (iii), (iv))
-- Tariff rate (from column 5)
-- Notes like (A), (B), (C) conditions
-
-**STEP 3: Extract document metadata:**
-- Look for P.U.(A) number in the header → basis_law
-- Look for "tarikh kuatkuasa" or effective date → effective_date_from
-- Product description (e.g., Cold rolled steel coils)
+**STEP 2: EXTRACT FROM SCHEDULE / ANTI-DUMPING DUTIES TABLE**
+The table has these columns:
+- (1) Heading No./Subheading → hs_code (e.g., 7210.49.11 00)
+- (2) Description of goods → product_description
+- (3) Country → country
+- (4) Producer/Exporter → company (Roman numerals are SEPARATE companies)
+- (5) Rate of Duties → tariff_rate
 
 **COMPANY EXTRACTION RULES:**
 - (i), (ii), (iii), (iv) = SEPARATE companies, each must be extracted
@@ -471,32 +470,31 @@ These appear in "(1) Heading/Subheading Number according to H.S. Code" column.
 
 **OUTPUT FORMAT:**
 {
+  "effective_date_from": "YYYY-MM-DD or null",
+  "effective_date_to": "YYYY-MM-DD or null",
   "hs_codes": [
     "7210.49.11 00",
-    "7210.49.12 00",
-    "7210.61.11 00"
+    "7210.49.12 00"
   ],
   "items": [
     {
-      "country": "Country name",
-      "hs_code": null,
+      "country": "Country from column (3)",
+      "hs_code": "Code from column (1) or null",
       "tariff_type": "Antidumping",
-      "tariff_rate": number (0 for Nil),
-      "effective_date_from": "YYYY-MM-DD or null",
-      "basis_law": "P.U.(A) xxx/20xx or null",
-      "company": "Company name",
-      "product_description": "Cold rolled coils/sheets or null",
+      "tariff_rate": number from column (5) (0 for Nil),
+      "company": "Company from column (4)",
+      "product_description": "Description from column (2)",
       "note": "(A), (B), (C) conditions if any"
     }
   ]
 }
 
 **IMPORTANT CHECKLIST:**
-- [ ] Extract EVERY HS code visible in the table (usually 10-20 codes)
-- [ ] Extract EVERY company including "Others" or "Other producer or exporter"
-- [ ] Keep hs_code as null in items - we will combine them later
+- [ ] Extract effective_date_from from "Citation and commencement"
+- [ ] Extract EVERY HS code from column (1)
+- [ ] Extract EVERY company including "Others"
+- [ ] Each company with (i), (ii), (iii) is a SEPARATE item
 - [ ] Convert "Nil" tariff rates to 0
-- [ ] Extract P.U.(A) number as basis_law from document header
 
 Output ONLY valid JSON."""
 
