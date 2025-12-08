@@ -1,11 +1,17 @@
 """
 관세 데이터 대시보드
-Streamlit 기반 tariff_data.db 시각화 애플리케이션
+Streamlit 기반 tariff_data.db 시각화 애플리케이션 + AI 챗봇
 """
 
 import streamlit as st
 import sqlite3
 import pandas as pd
+import os
+from dotenv import load_dotenv
+from openai import OpenAI
+
+# 환경 변수 로드
+load_dotenv()
 
 # 페이지 설정
 st.set_page_config(
@@ -56,6 +62,20 @@ st.markdown("""
         padding-left: 0.5rem;
         margin-bottom: 1rem;
     }
+    /* 챗봇 스타일 */
+    .chat-message {
+        padding: 1rem;
+        border-radius: 10px;
+        margin-bottom: 0.5rem;
+    }
+    .user-message {
+        background-color: #e3f2fd;
+        border-left: 4px solid #2196f3;
+    }
+    .assistant-message {
+        background-color: #f5f5f5;
+        border-left: 4px solid #4caf50;
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -66,6 +86,15 @@ def get_connection():
     return sqlite3.connect("tariff_data.db", check_same_thread=False)
 
 
+@st.cache_resource
+def get_openai_client():
+    """OpenAI 클라이언트 초기화"""
+    api_key = os.environ.get("OPENAI_API_KEY")
+    if not api_key:
+        return None
+    return OpenAI(api_key=api_key)
+
+
 @st.cache_data
 def get_unique_values(column: str) -> list:
     """특정 컬럼의 고유값 목록 조회"""
@@ -73,6 +102,113 @@ def get_unique_values(column: str) -> list:
     query = f"SELECT DISTINCT {column} FROM tariff_items WHERE {column} IS NOT NULL ORDER BY {column}"
     df = pd.read_sql(query, conn)
     return ["All"] + df[column].tolist()
+
+
+@st.cache_data
+def get_db_summary() -> str:
+    """데이터베이스 요약 정보"""
+    conn = get_connection()
+    
+    # 총 항목 수
+    total = pd.read_sql("SELECT COUNT(*) as cnt FROM tariff_items", conn)['cnt'].iloc[0]
+    
+    # 발급국가 목록
+    issuing = pd.read_sql(
+        "SELECT issuing_country, COUNT(*) as cnt FROM tariff_items GROUP BY issuing_country ORDER BY cnt DESC", 
+        conn
+    )
+    
+    # 대상국가 목록
+    countries = pd.read_sql(
+        "SELECT country, COUNT(*) as cnt FROM tariff_items WHERE country IS NOT NULL GROUP BY country ORDER BY cnt DESC LIMIT 10",
+        conn
+    )
+    
+    summary = f"""
+데이터베이스 요약:
+- 총 관세 항목: {total:,}건
+- 발급국가: {', '.join([f"{row['issuing_country']}({row['cnt']}건)" for _, row in issuing.iterrows()])}
+- 주요 대상국가 (상위 10개): {', '.join([f"{row['country']}({row['cnt']}건)" for _, row in countries.iterrows()])}
+
+테이블 구조 (tariff_items):
+- issuing_country: 관세 발급국 (USA, Malaysia 등)
+- country: 대상국 (수출국)
+- hs_code: HS 코드
+- tariff_type: 관세 유형 (Antidumping, Countervailing)
+- tariff_rate: 관세율 (%)
+- company: 회사명
+- case_number: 케이스 번호
+- product_description: 제품 설명
+- effective_date_from/to: 시행일
+- basis_law: 법적 근거
+"""
+    return summary
+
+
+def execute_sql_query(query: str) -> pd.DataFrame:
+    """SQL 쿼리 실행 (SELECT만 허용)"""
+    conn = get_connection()
+    query_lower = query.strip().lower()
+    
+    # SELECT 쿼리만 허용
+    if not query_lower.startswith("select"):
+        return pd.DataFrame({"error": ["SELECT 쿼리만 허용됩니다."]})
+    
+    # 위험한 키워드 차단
+    dangerous = ["drop", "delete", "update", "insert", "alter", "create", "truncate"]
+    for word in dangerous:
+        if word in query_lower:
+            return pd.DataFrame({"error": [f"'{word}' 키워드는 사용할 수 없습니다."]})
+    
+    try:
+        return pd.read_sql(query, conn)
+    except Exception as e:
+        return pd.DataFrame({"error": [str(e)]})
+
+
+def chat_with_ai(user_message: str, chat_history: list) -> str:
+    """AI 챗봇 응답 생성"""
+    client = get_openai_client()
+    if not client:
+        return "⚠️ OpenAI API 키가 설정되지 않았습니다. `.env` 파일에 `OPENAI_API_KEY`를 설정하세요."
+    
+    db_summary = get_db_summary()
+    
+    system_prompt = f"""당신은 관세 데이터 분석 전문가입니다. 사용자의 질문에 친절하게 답변해주세요.
+
+{db_summary}
+
+**중요 규칙:**
+1. 사용자가 데이터를 조회하고 싶어하면, SQL 쿼리를 생성해서 ```sql 블록으로 제공하세요.
+2. 관세 관련 질문에는 데이터베이스 정보를 활용해 답변하세요.
+3. 국가명은 정규화되어 있습니다: South Korea, China, Vietnam, Taiwan, EU, USA 등
+4. 항상 한국어로 답변하세요.
+5. SQL 쿼리 결과가 필요하면 쿼리를 제공하고 "이 쿼리를 실행해보세요"라고 안내하세요.
+
+**SQL 쿼리 작성 시 주의:**
+- 테이블명: tariff_items
+- LIKE 사용 시: WHERE hs_code LIKE '72%'
+- 정확한 컬럼명 사용
+"""
+    
+    messages = [{"role": "system", "content": system_prompt}]
+    
+    # 최근 대화 내역 추가 (최대 10개)
+    for msg in chat_history[-10:]:
+        messages.append({"role": msg["role"], "content": msg["content"]})
+    
+    messages.append({"role": "user", "content": user_message})
+    
+    try:
+        response = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=messages,
+            temperature=0.7,
+            max_tokens=1500
+        )
+        return response.choices[0].message.content
+    except Exception as e:
+        return f"⚠️ AI 응답 오류: {str(e)}"
 
 
 def get_filtered_data(issuing_country: str, country: str, hs_code_prefix: str) -> pd.DataFrame:
@@ -116,7 +252,87 @@ def get_filtered_data(issuing_country: str, country: str, hs_code_prefix: str) -
     return pd.read_sql(query, conn, params=params)
 
 
+def render_chatbot():
+    """챗봇 사이드바 렌더링"""
+    st.sidebar.markdown("## 🤖 AI 관세 어시스턴트")
+    st.sidebar.markdown("---")
+    
+    # 대화 내역 초기화
+    if "chat_history" not in st.session_state:
+        st.session_state.chat_history = []
+    
+    # 대화 내역 표시
+    chat_container = st.sidebar.container()
+    with chat_container:
+        for msg in st.session_state.chat_history:
+            if msg["role"] == "user":
+                st.markdown(f'<div class="chat-message user-message">👤 {msg["content"]}</div>', 
+                           unsafe_allow_html=True)
+            else:
+                st.markdown(f'<div class="chat-message assistant-message">🤖 {msg["content"]}</div>', 
+                           unsafe_allow_html=True)
+    
+    # 입력 폼
+    with st.sidebar.form(key="chat_form", clear_on_submit=True):
+        user_input = st.text_area(
+            "질문을 입력하세요:",
+            placeholder="예: 한국에 적용되는 반덤핑 관세율을 알려줘",
+            height=80
+        )
+        col1, col2 = st.columns([1, 1])
+        with col1:
+            submit = st.form_submit_button("💬 전송", use_container_width=True)
+        with col2:
+            clear = st.form_submit_button("🗑️ 초기화", use_container_width=True)
+    
+    if submit and user_input.strip():
+        # 사용자 메시지 추가
+        st.session_state.chat_history.append({
+            "role": "user", 
+            "content": user_input.strip()
+        })
+        
+        # AI 응답 생성
+        with st.spinner("AI가 답변 중..."):
+            response = chat_with_ai(user_input.strip(), st.session_state.chat_history)
+        
+        # AI 응답 추가
+        st.session_state.chat_history.append({
+            "role": "assistant",
+            "content": response
+        })
+        
+        st.rerun()
+    
+    if clear:
+        st.session_state.chat_history = []
+        st.rerun()
+    
+    # SQL 쿼리 실행 섹션
+    st.sidebar.markdown("---")
+    st.sidebar.markdown("### 📝 SQL 쿼리 실행")
+    
+    with st.sidebar.form(key="sql_form"):
+        sql_input = st.text_area(
+            "SQL 쿼리:",
+            placeholder="SELECT * FROM tariff_items LIMIT 10",
+            height=80
+        )
+        run_sql = st.form_submit_button("▶️ 실행", use_container_width=True)
+    
+    if run_sql and sql_input.strip():
+        result = execute_sql_query(sql_input.strip())
+        if "error" in result.columns:
+            st.sidebar.error(result["error"].iloc[0])
+        else:
+            st.sidebar.success(f"✓ {len(result)}건 조회됨")
+            st.sidebar.dataframe(result, height=200)
+
+
 def main():
+    # 챗봇 사이드바
+    render_chatbot()
+    
     # 헤더
     st.markdown('<div class="main-header">📊 관세 데이터 대시보드</div>', unsafe_allow_html=True)
     
