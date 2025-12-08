@@ -34,6 +34,7 @@ lee_pro/
 ├── PDF/                         # PDF 입력 폴더 (24개 파일)
 ├── database.py                  # SQLite DB 관리 모듈
 ├── tariff_extractor.py          # 메인 실행 파일 ⭐
+├── normalize_countries.py       # 국가명 정규화 스크립트
 ├── streamlit_app.py             # 웹 대시보드 ⭐
 ├── tariff_data.db               # SQLite 데이터베이스
 ├── requirements.txt             # Python 의존성
@@ -203,7 +204,7 @@ GROUP BY issuing_country;
 -- 특정 국가의 모든 관세
 SELECT hs_code, company, tariff_rate, effective_date_from
 FROM tariff_items
-WHERE country = 'Republic of Korea'
+WHERE country = 'South Korea'
 ORDER BY hs_code;
 
 -- HS 코드로 검색
@@ -219,10 +220,11 @@ WHERE hs_code LIKE '7225%';
 |------|----------|
 | HS 코드 미추출 | USA Parser: SCOPE 섹션 전체 추출 |
 | 발행 국가 정보 없음 | `issuing_country` 필드 추가 |
-| Case Number 미추출 | Malaysia Parser: 페이지 상단 추출 |
+| Case Number 미추출 | 파일명에서 자동 추출 (`extract_case_number_from_filename`) |
 | JSON 파싱 오류 | `try_repair_json` 함수로 잘린 JSON 복구 |
 | EU 8자리 HS 코드 | EU Parser: 72251100 형식 지원 |
 | Cash Deposit 처리 | USA Parser: note 필드에 기록 |
+| **국가명 불일치** | `normalize_country_name()` 함수로 자동 정규화 |
 
 ---
 
@@ -254,29 +256,41 @@ elif 'JAPAN_' in file_name_upper:
 
 ## ⚠️ 보완사항
 
-### 국가명 통일 필요
+> ✅ **국가명 통일 - 해결됨!**  
+> 아래 국가명 정규화 기능이 구현되어 자동으로 통일됩니다.
 
-현재 각 국가별 파서에서 추출되는 국가명이 서로 다르게 저장되어 있습니다.
+---
 
-| 파서 | 현재 저장된 값 |
-|------|---------------|
-| 🇦🇺 Australia | `Korea` |
-| 🇲🇾 Malaysia | `The Republic of Korea` |
-| 🇺🇸 USA | `Republic of Korea` |
-| 🇪🇺 EU | `Korea` |
-| 🇵🇰 Pakistan | `South Korea` |
+## ✅ 국가명 정규화 (v2.0 신규)
 
-**→ 통일해서 DB에 저장 필요**
+파싱 시 다양한 국가명 표기가 자동으로 표준화됩니다.
 
-**개선 방안**:
-```python
-COUNTRY_NAME_MAP = {
-    "Korea": "Republic of Korea",
-    "The Republic of Korea": "Republic of Korea", 
-    "South Korea": "Republic of Korea",
-    "ROK": "Republic of Korea",
-}
+### 정규화 예시
+
+| 원본 | 정규화 결과 |
+|------|------------|
+| Republic of Korea, The Republic of Korea, Korea | **South Korea** |
+| People's Republic of China, The People's Republic of China | **China** |
+| The Socialist Republic of Viet Nam, Viet Nam | **Vietnam** |
+| Chinese Taipei, Republic of China | **Taiwan** |
+| European Union | **EU** |
+| United States of America | **USA** |
+
+### 사용 방법
+
+```bash
+# 새 파싱: 자동 정규화 적용
+python tariff_extractor.py
+
+# 기존 DB 정규화
+python normalize_countries.py
 ```
+
+### 관련 코드
+
+- `tariff_extractor.py`: `normalize_country_name()` 함수
+- `normalize_countries.py`: 기존 DB 업데이트 스크립트
+
 
 ---
 

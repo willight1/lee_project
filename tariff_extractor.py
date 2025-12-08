@@ -65,6 +65,130 @@ def extract_case_number_from_filename(file_name: str) -> str:
     return None
 
 
+# 국가명 정규화 매핑 테이블
+COUNTRY_NAME_MAPPING = {
+    # 한국
+    "Republic of Korea": "South Korea",
+    "The Republic of Korea": "South Korea",
+    "Korea": "South Korea",
+    "South Korea": "South Korea",
+    "Rep. of Korea": "South Korea",
+    "ROK": "South Korea",
+    
+    # 중국
+    "People's Republic of China": "China",
+    "The People's Republic of China": "China",
+    "P.R.C": "China",
+    "PRC": "China",
+    "China": "China",
+    
+    # 베트남
+    "The Socialist Republic of Viet Nam": "Vietnam",
+    "Socialist Republic of Viet Nam": "Vietnam",
+    "The Socialist Republic of Vietnam": "Vietnam",
+    "Socialist Republic of Vietnam": "Vietnam",
+    "Republik Sosialis Viet Nam": "Vietnam",
+    "Viet Nam": "Vietnam",
+    "Vietnam": "Vietnam",
+    
+    # 대만
+    "Chinese Taipei": "Taiwan",
+    "Republic of China": "Taiwan",
+    "Taiwan": "Taiwan",
+    
+    # 태국
+    "Kingdom of Thailand": "Thailand",
+    "Thailand": "Thailand",
+    
+    # 인도네시아
+    "Republic of Indonesia": "Indonesia",
+    "Republik Indonesia": "Indonesia",
+    "Indonesia": "Indonesia",
+    
+    # EU
+    "European Union": "EU",
+    "EU": "EU",
+    
+    # 터키
+    "Republic of Turkey": "Turkey",
+    "Türkiye": "Turkey",
+    "Turkey": "Turkey",
+    
+    # 러시아
+    "Russian Federation": "Russia",
+    "Russia": "Russia",
+    
+    # 미국
+    "United States of America": "USA",
+    "United States": "USA",
+    "USA": "USA",
+    "U.S.A": "USA",
+    
+    # 일본
+    "Japan": "Japan",
+    
+    # 인도
+    "India": "India",
+    "Republic of India": "India",
+    
+    # 브라질
+    "Brazil": "Brazil",
+    "Federative Republic of Brazil": "Brazil",
+    
+    # 호주
+    "Australia": "Australia",
+    "Commonwealth of Australia": "Australia",
+    
+    # 말레이시아
+    "Malaysia": "Malaysia",
+    
+    # 영국
+    "United Kingdom": "UK",
+    "UK": "UK",
+    "Great Britain": "UK",
+    
+    # 네덜란드
+    "Netherlands": "Netherlands",
+    "The Netherlands": "Netherlands",
+    
+    # 이탈리아
+    "Italy": "Italy",
+    
+    # 스페인
+    "Spain": "Spain",
+}
+
+
+def normalize_country_name(country: str) -> str:
+    """
+    국가명을 표준 형식으로 정규화
+    
+    예시:
+    - "Republic of Korea" → "South Korea"
+    - "People's Republic of China" → "China"
+    - "The Socialist Republic of Viet Nam" → "Vietnam"
+    """
+    if not country:
+        return country
+    
+    # 정확히 매칭되는 경우
+    country_stripped = country.strip()
+    if country_stripped in COUNTRY_NAME_MAPPING:
+        return COUNTRY_NAME_MAPPING[country_stripped]
+    
+    # 대소문자 무시하고 매칭
+    country_lower = country_stripped.lower()
+    for key, value in COUNTRY_NAME_MAPPING.items():
+        if key.lower() == country_lower:
+            return value
+    
+    # 부분 매칭 시도 (예: "The People's Republic of China" 같은 변형)
+    for key, value in COUNTRY_NAME_MAPPING.items():
+        if key.lower() in country_lower or country_lower in key.lower():
+            return value
+    
+    # 매칭 안되면 원본 반환
+    return country_stripped
 
 
 class TariffExtractor:
@@ -115,6 +239,18 @@ class TariffExtractor:
             for item in items:
                 if not item.get('case_number'):
                     item['case_number'] = case_number
+
+        # 국가명 정규화
+        normalized_count = 0
+        for item in items:
+            if item.get('country'):
+                original = item['country']
+                normalized = normalize_country_name(original)
+                if original != normalized:
+                    item['country'] = normalized
+                    normalized_count += 1
+        if normalized_count > 0:
+            print(f"  🌍 Normalized {normalized_count} country names")
 
         # 페이지 수
         doc = fitz.open(pdf_path)
