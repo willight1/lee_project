@@ -128,8 +128,120 @@ class TariffDatabase:
             self.conn.rollback()
             return None
 
-    def insert_tariff_item(self, doc_id: int, item: Dict, issuing_country: str = None):
-        """Insert tariff item with improved fields"""
+    def upsert_or_merge_tariff_item(self, doc_id: int, item: Dict, issuing_country: str = None) -> str:
+        """
+        Tariff item 병합 삽입.
+        - 기존 데이터가 있으면: null 필드만 새 값으로 채움 (기존 값 유지)
+        - 기존 데이터가 없으면: 새로 삽입
+        
+        매칭 기준: doc_id + country + company + hs_code + case_number
+        
+        Returns: 'inserted' (신규), 'merged' (병합), 'skipped' (변경 없음), 'error' (오류)
+        """
+        try:
+            # 매칭 키 생성
+            country = item.get('country')
+            company = item.get('company')
+            hs_code = item.get('hs_code')
+            case_number = item.get('case_number')
+            
+            # 기존 데이터 찾기 (매칭 기준: 주요 키 조합)
+            self.cursor.execute("""
+                SELECT tariff_id, country, hs_code, tariff_type, tariff_rate,
+                       effective_date_from, effective_date_to,
+                       investigation_period_from, investigation_period_to,
+                       basis_law, company, case_number, product_description, note
+                FROM tariff_items
+                WHERE doc_id = ?
+                  AND (country = ? OR (country IS NULL AND ? IS NULL))
+                  AND (company = ? OR (company IS NULL AND ? IS NULL))
+                  AND (hs_code = ? OR (hs_code IS NULL AND ? IS NULL))
+                  AND (case_number = ? OR (case_number IS NULL AND ? IS NULL))
+            """, (doc_id, country, country, company, company, hs_code, hs_code, case_number, case_number))
+            
+            existing = self.cursor.fetchone()
+            
+            if existing:
+                # 기존 데이터가 있으면 null 필드만 업데이트
+                tariff_id = existing['tariff_id']
+                updates = {}
+                
+                # 업데이트 가능한 필드들
+                fields_to_check = [
+                    ('tariff_type', item.get('tariff_type')),
+                    ('tariff_rate', item.get('tariff_rate')),
+                    ('effective_date_from', item.get('effective_date_from')),
+                    ('effective_date_to', item.get('effective_date_to')),
+                    ('investigation_period_from', item.get('investigation_period_from')),
+                    ('investigation_period_to', item.get('investigation_period_to')),
+                    ('basis_law', item.get('basis_law')),
+                    ('product_description', item.get('product_description')),
+                    ('note', item.get('note')),
+                    # 키 필드도 null이면 채움
+                    ('country', country),
+                    ('company', company),
+                    ('hs_code', hs_code),
+                    ('case_number', case_number),
+                ]
+                
+                for field_name, new_value in fields_to_check:
+                    # 기존 값이 null이고 새 값이 있으면 업데이트
+                    if existing[field_name] is None and new_value is not None:
+                        updates[field_name] = new_value
+                
+                if updates:
+                    set_clause = ', '.join([f"{k} = ?" for k in updates.keys()])
+                    values = list(updates.values()) + [tariff_id]
+                    
+                    self.cursor.execute(f"""
+                        UPDATE tariff_items
+                        SET {set_clause}
+                        WHERE tariff_id = ?
+                    """, values)
+                    self.conn.commit()
+                    return 'merged'
+                else:
+                    return 'skipped'
+            else:
+                # 기존 데이터가 없으면 새로 삽입
+                self.cursor.execute("""
+                    INSERT INTO tariff_items (
+                        doc_id, issuing_country, country, hs_code, tariff_type, tariff_rate,
+                        effective_date_from, effective_date_to,
+                        investigation_period_from, investigation_period_to,
+                        basis_law, company, case_number, product_description, note
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """, (
+                    doc_id, 
+                    issuing_country, 
+                    country,
+                    hs_code,
+                    item.get('tariff_type'),
+                    item.get('tariff_rate'),
+                    item.get('effective_date_from'),
+                    item.get('effective_date_to'),
+                    item.get('investigation_period_from'),
+                    item.get('investigation_period_to'),
+                    item.get('basis_law'),
+                    company,
+                    case_number,
+                    item.get('product_description'),
+                    item.get('note')
+                ))
+                self.conn.commit()
+                return 'inserted'
+                
+        except Exception as e:
+            print(f"  ✗ Error upserting tariff item: {e}")
+            print(f"     Item: {item}")
+            self.conn.rollback()
+            return 'error'
+
+    def insert_tariff_item(self, doc_id: int, item: Dict, issuing_country: str = None) -> bool:
+        """
+        Insert tariff item (단순 INSERT).
+        Returns: True (성공), False (실패)
+        """
         try:
             self.cursor.execute("""
                 INSERT INTO tariff_items (
@@ -139,8 +251,8 @@ class TariffDatabase:
                     basis_law, company, case_number, product_description, note
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
-                doc_id,
-                issuing_country,
+                doc_id, 
+                issuing_country, 
                 item.get('country'),
                 item.get('hs_code'),
                 item.get('tariff_type'),
@@ -156,10 +268,12 @@ class TariffDatabase:
                 item.get('note')
             ))
             self.conn.commit()
+            return True
         except Exception as e:
             print(f"  ✗ Error inserting tariff item: {e}")
             print(f"     Item: {item}")
             self.conn.rollback()
+            return False
 
     def delete_tariff_items_by_doc(self, doc_id: int):
         """Delete all tariff items for a document"""

@@ -165,11 +165,13 @@ This section contains the FINAL anti-dumping duty rates. Extract:
 1. **Company names** and their **tariff rates** (percentages)
 2. **Countries** associated with each company
 3. Apply the provided HS codes to ALL companies
+4. **Case number** - Look for "ADN" numbers (e.g., ADN 2023/035)
 
 **IMPORTANT RULES:**
 - ONLY extract POSITIVE tariff rates (skip negative rates)
 - Use the HS codes provided at the end of this prompt
 - Create one item per (HS code × company) combination
+- Extract ADN number from the document header as case_number
 
 **OUTPUT FORMAT:**
 
@@ -186,7 +188,7 @@ This section contains the FINAL anti-dumping duty rates. Extract:
       "investigation_period_to": null,
       "basis_law": "Customs Act 1901",
       "company": "Company name",
-      "case_number": "REP/ADN number",
+      "case_number": "ADN 20XX/XXX or REP XXX",
       "product_description": "Steel products",
       "note": null
     }

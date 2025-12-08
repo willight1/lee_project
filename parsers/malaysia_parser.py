@@ -108,11 +108,18 @@ class MalaysiaTextParser(DefaultTextParser):
 1. **Country** names
 2. **Company** names - including "Others" or "Other producers"
 3. **Tariff rates** (% or "Nil" = 0)
+4. **Effective date** - when the duty comes into effect
+5. **Legal basis** - P.U.(A) number from the document header
 
 **COMPANY EXTRACTION RULES:**
 - Roman numerals (i), (ii), (iii), (iv), (v) = SEPARATE companies
 - "Others", "Other producers", "Lain-lain" = valid company, include it
 - Alphabetical markers (A), (B), (C) = notes, NOT companies
+
+**DATE EXTRACTION:**
+- Look for "tarikh kuatkuasa" or "effective date" in the document
+- Common format: "1 Januari 2023" or "1 January 2023"
+- Convert to YYYY-MM-DD format
 
 **OUTPUT FORMAT:**
 {
@@ -122,7 +129,11 @@ class MalaysiaTextParser(DefaultTextParser):
       "hs_code": null,
       "tariff_type": "Antidumping",
       "tariff_rate": number (0 for Nil),
+      "effective_date_from": "YYYY-MM-DD or null",
+      "effective_date_to": null,
+      "basis_law": "P.U.(A) xxx/20xx",
       "company": "Company name or Others",
+      "product_description": "Cold rolled steel coils/sheets or similar",
       "note": "(A), (B), (C) conditions if any"
     }
   ]
@@ -132,6 +143,8 @@ class MalaysiaTextParser(DefaultTextParser):
 - [ ] Include ALL companies with (i), (ii), (iii), etc.
 - [ ] Include "Others" as a company
 - [ ] Convert "Nil" to 0
+- [ ] Extract P.U.(A) number as basis_law
+- [ ] Extract effective date if visible
 
 Output ONLY valid JSON.
 """
@@ -446,6 +459,11 @@ These appear in "(1) Heading/Subheading Number according to H.S. Code" column.
 - Tariff rate (from column 5)
 - Notes like (A), (B), (C) conditions
 
+**STEP 3: Extract document metadata:**
+- Look for P.U.(A) number in the header → basis_law
+- Look for "tarikh kuatkuasa" or effective date → effective_date_from
+- Product description (e.g., Cold rolled steel coils)
+
 **COMPANY EXTRACTION RULES:**
 - (i), (ii), (iii), (iv) = SEPARATE companies, each must be extracted
 - "Others", "Other producers", "Other producer or exporter" = valid company, MUST include
@@ -464,7 +482,10 @@ These appear in "(1) Heading/Subheading Number according to H.S. Code" column.
       "hs_code": null,
       "tariff_type": "Antidumping",
       "tariff_rate": number (0 for Nil),
+      "effective_date_from": "YYYY-MM-DD or null",
+      "basis_law": "P.U.(A) xxx/20xx or null",
       "company": "Company name",
+      "product_description": "Cold rolled coils/sheets or null",
       "note": "(A), (B), (C) conditions if any"
     }
   ]
@@ -475,6 +496,7 @@ These appear in "(1) Heading/Subheading Number according to H.S. Code" column.
 - [ ] Extract EVERY company including "Others" or "Other producer or exporter"
 - [ ] Keep hs_code as null in items - we will combine them later
 - [ ] Convert "Nil" tariff rates to 0
+- [ ] Extract P.U.(A) number as basis_law from document header
 
 Output ONLY valid JSON."""
 
