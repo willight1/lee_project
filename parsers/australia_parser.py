@@ -209,15 +209,29 @@ class AustraliaTextParser(DefaultTextParser):
 
 **⚠️ CRITICAL: ONLY THE FIRST TABLE AFTER "10 MEASURES" ⚠️**
 
-**RULES:**
-1. Look for the "10 MEASURES" or "10. MEASURES" heading
-2. Extract data ONLY from the FIRST table that appears immediately after that heading
-3. STOP when you reach a second table or a new section heading
+**TABLE STRUCTURE:**
+The table has these columns:
+- Country
+- Exporter (company name)
+- Measure (IDD, ICD, or "IDD and ICD")
+- Measure type (Floor price, Combination, etc.)
+- Effective rate of duty (percentage)
+
+**MAPPING RULES:**
+1. **Measure → tariff_type:**
+   - If Measure = "IDD" → tariff_type = "Antidumping"
+   - If Measure = "ICD" → tariff_type = "Countervailing"
+   - If Measure = "IDD and ICD" → CREATE TWO SEPARATE ITEMS:
+     - One with tariff_type = "Antidumping"
+     - One with tariff_type = "Countervailing"
+
+2. **Measure type → note:**
+   - Store the Measure type value (e.g., "Floor price", "Combination") in the note field
 
 **WHAT TO EXTRACT:**
-- Every row from that FIRST table
-- Each row = one company = one JSON item
-- Include rows with 0% or "nil" duty
+- Every row from the table
+- Each row = one or two JSON items (two if "IDD and ICD")
+- Include rows with 0%, N/A, or "nil" duty
 
 **OUTPUT FORMAT:**
 {
@@ -225,17 +239,17 @@ class AustraliaTextParser(DefaultTextParser):
     {
       "country": "Country name",
       "hs_code": null,
-      "tariff_type": "Antidumping",
-      "tariff_rate": number or 0,
+      "tariff_type": "Antidumping or Countervailing",
+      "tariff_rate": number or null (for N/A),
       "effective_date_from": null,
       "effective_date_to": null,
       "investigation_period_from": null,
       "investigation_period_to": null,
       "basis_law": "Customs Act 1901",
-      "company": "Company name from table row",
+      "company": "Company/Exporter name from table row",
       "case_number": null,
       "product_description": null,
-      "note": null
+      "note": "Measure type value (Floor price, Combination, etc.)"
     }
   ]
 }
