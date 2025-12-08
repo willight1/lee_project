@@ -17,27 +17,45 @@ class AustraliaTextParser(DefaultTextParser):
     """호주 특화 파서 - OCR 버전 (MEASURES 섹션만 사용, 음수 비율 제거)"""
 
     def extract_measures_section(self, text: str) -> str:
-        """10 MEASURES 섹션만 추출"""
-        # "10 MEASURES" 또는 유사한 패턴 찾기 (숫자와 MEASURES 사이에 공백/점 가능)
+        """10 MEASURES 섹션의 첫 번째 표만 추출 (목차가 아닌 본문에서)"""
+        # 본문의 10 MEASURES를 찾기 위해 "10.1 Recommendations" 패턴 사용
+        # 목차에는 페이지 번호가 붙어있고 본문에는 없음
         patterns = [
-            r'10\s+MEASURES',
-            r'10\.\s*MEASURES',
-            r'10\s*\.\s*MEASURES',
-            r'MEASURES\s+10\.1',
+            r'10\.1\s+Recommendations\s*\n',  # 본문의 10.1 섹션
+            r'10\s+MEASURES\s*\n10\.1',       # "10 MEASURES" 다음에 바로 "10.1"
         ]
         
         for pattern in patterns:
             match = re.search(pattern, text, re.IGNORECASE)
             if match:
-                measures_text = text[match.start():]
-                # 너무 길면 자르기 (30000자 제한)
-                if len(measures_text) > 30000:
-                    measures_text = measures_text[:30000]
+                # 10.1 이전의 "10 MEASURES" 헤더도 포함하기 위해 조금 앞에서 시작
+                start_pos = max(0, match.start() - 200)
+                measures_text = text[start_pos:]
+                
+                # 20,000자만 추출
+                measures_text = measures_text[:20000]
+                    
                 print(f"    📝 Extracted MEASURES section ({len(measures_text):,} chars)")
                 return measures_text
         
-        print(f"    ⚠ MEASURES section not found, using last 30000 chars")
-        return text[-30000:]  # 마지막 부분 사용
+        # 폴백: 일반 패턴 사용
+        simple_patterns = [r'10\s+MEASURES', r'10\.\s*MEASURES']
+        for pattern in simple_patterns:
+            matches = list(re.finditer(pattern, text, re.IGNORECASE))
+            if len(matches) >= 2:
+                # 두 번째 매치 사용 (첫 번째는 목차일 가능성 높음)
+                match = matches[1]
+            elif matches:
+                match = matches[0]
+            else:
+                continue
+                
+            measures_text = text[match.start():][:20000]
+            print(f"    📝 Extracted MEASURES section ({len(measures_text):,} chars)")
+            return measures_text
+        
+        print(f"    ⚠ MEASURES section not found, using last 20000 chars")
+        return text[-20000:]
 
     def extract_hs_codes_from_section_34(self, text: str) -> List[str]:
         """3.4 Tariff Classification 섹션에서 8자리 HS Code 추출"""
@@ -59,40 +77,59 @@ class AustraliaTextParser(DefaultTextParser):
         return hs_codes
 
     def post_process_items(self, items: List[Dict]) -> List[Dict]:
-        """후처리: 음수 비율 제거, HS Code 형식 검증"""
+        """후처리: 음수 비율만 제거 (HS Code는 expand에서 처리)"""
         processed = []
         negative_removed = 0
-        invalid_hs_removed = 0
         
         for item in items:
-            # 1. 음수 비율 제거
+            # 1. 음수 비율만 제거 (null이나 0은 허용)
             rate = item.get('tariff_rate')
             if rate is not None:
                 try:
                     rate_float = float(rate)
                     if rate_float < 0:
                         negative_removed += 1
-                        continue  # 음수 비율은 건너뛰기
+                        continue  # 음수 비율만 건너뛰기
                 except (ValueError, TypeError):
+                    # 숫자가 아닌 경우는 그대로 유지 (note로 이동됨)
                     pass
             
-            # 2. HS Code 형식 검증 (XXXX.XX.XX)
-            hs_code = item.get('hs_code')
-            if hs_code:
-                hs_str = str(hs_code)
-                # 8자리 형식 검증
-                if not re.match(r'^\d{4}\.\d{2}\.\d{2}$', hs_str):
-                    invalid_hs_removed += 1
-                    continue  # 잘못된 형식은 건너뛰기
-            
+            # HS Code 검증 제거 - expand_hs_codes에서 올바른 HS 코드로 대체됨
             processed.append(item)
         
         if negative_removed > 0:
             print(f"    ✓ Removed {negative_removed} items with negative rates")
-        if invalid_hs_removed > 0:
-            print(f"    ✓ Removed {invalid_hs_removed} items with invalid HS codes")
         
         return processed
+
+    def extract_inquiry_period(self, text: str) -> tuple:
+        """Introduction에서 Inquiry period 추출 (조사기간)"""
+        # 패턴: "Inquiry period  1 July 2021 to 30 June 2022" 형태
+        patterns = [
+            r'Inquiry\s+period\s+(\d{1,2}\s+\w+\s+\d{4})\s+to\s+(\d{1,2}\s+\w+\s+\d{4})',
+            r'investigation\s+period\s+(\d{1,2}\s+\w+\s+\d{4})\s+to\s+(\d{1,2}\s+\w+\s+\d{4})',
+            r'inquiry\s+period[:\s]+(\d{1,2}\s+\w+\s+\d{4})\s*[-–to]+\s*(\d{1,2}\s+\w+\s+\d{4})',
+        ]
+        
+        for pattern in patterns:
+            match = re.search(pattern, text, re.IGNORECASE)
+            if match:
+                from_date_str = match.group(1)
+                to_date_str = match.group(2)
+                
+                # 날짜 형식 변환 (1 July 2021 -> 2021-07-01)
+                try:
+                    from datetime import datetime
+                    from_date = datetime.strptime(from_date_str, "%d %B %Y").strftime("%Y-%m-%d")
+                    to_date = datetime.strptime(to_date_str, "%d %B %Y").strftime("%Y-%m-%d")
+                    print(f"    📅 Found Inquiry period: {from_date} to {to_date}")
+                    return (from_date, to_date)
+                except ValueError:
+                    # 날짜 파싱 실패 시 원본 문자열 반환
+                    print(f"    📅 Found Inquiry period (raw): {from_date_str} to {to_date_str}")
+                    return (from_date_str, to_date_str)
+        
+        return (None, None)
 
     def process(self, pdf_path: str) -> List[Dict]:
         """PDF 처리: MEASURES 섹션만 추출 후 파싱"""
@@ -105,6 +142,9 @@ class AustraliaTextParser(DefaultTextParser):
         
         # 2. 전체 텍스트에서 HS Code 먼저 추출 (섹션 3.4에서)
         all_hs_codes = self.extract_hs_codes_from_section_34(text)
+        
+        # 2.5. Introduction에서 Inquiry period 추출
+        inquiry_from, inquiry_to = self.extract_inquiry_period(text)
         
         # 3. MEASURES 섹션만 추출
         measures_text = self.extract_measures_section(text)
@@ -127,6 +167,12 @@ class AustraliaTextParser(DefaultTextParser):
         # 6. HS Code × Company 조합 생성
         final_items = self.expand_hs_codes(processed_items, all_hs_codes)
         
+        # 7. Inquiry period 적용
+        if inquiry_from or inquiry_to:
+            for item in final_items:
+                item['investigation_period_from'] = inquiry_from
+                item['investigation_period_to'] = inquiry_to
+        
         print(f"  ➜ Final items after HS code expansion: {len(final_items)}")
         return final_items
 
@@ -144,6 +190,9 @@ class AustraliaTextParser(DefaultTextParser):
             if key not in unique_companies:
                 unique_companies[key] = item.copy()
         
+        # 디버깅: 추출된 회사 목록 출력
+        print(f"    🔍 Unique companies extracted: {[k[1] for k in unique_companies.keys()]}")
+        
         # 각 HS Code × 각 회사 조합 생성
         for hs_code in hs_codes:
             for key, template in unique_companies.items():
@@ -156,40 +205,36 @@ class AustraliaTextParser(DefaultTextParser):
 
     def create_extraction_prompt(self) -> str:
         """호주 관세 문서에 특화된 프롬프트"""
-        return """Extract tariff/trade remedy information from the Australian Anti-Dumping MEASURES section.
+        return """Extract tariff data from the FIRST TABLE immediately after "10 MEASURES" heading.
 
-**YOU ARE READING THE "10. MEASURES" SECTION ONLY.**
+**⚠️ CRITICAL: ONLY THE FIRST TABLE AFTER "10 MEASURES" ⚠️**
 
-This section contains the FINAL anti-dumping duty rates. Extract:
+**RULES:**
+1. Look for the "10 MEASURES" or "10. MEASURES" heading
+2. Extract data ONLY from the FIRST table that appears immediately after that heading
+3. STOP when you reach a second table or a new section heading
 
-1. **Company names** and their **tariff rates** (percentages)
-2. **Countries** associated with each company
-3. Apply the provided HS codes to ALL companies
-4. **Case number** - Look for "ADN" numbers (e.g., ADN 2023/035)
-
-**IMPORTANT RULES:**
-- ONLY extract POSITIVE tariff rates (skip negative rates)
-- Use the HS codes provided at the end of this prompt
-- Create one item per (HS code × company) combination
-- Extract ADN number from the document header as case_number
+**WHAT TO EXTRACT:**
+- Every row from that FIRST table
+- Each row = one company = one JSON item
+- Include rows with 0% or "nil" duty
 
 **OUTPUT FORMAT:**
-
 {
   "items": [
     {
-      "country": "Country name (e.g., China, Korea, Taiwan)",
-      "hs_code": "Use HS codes from the list provided",
+      "country": "Country name",
+      "hs_code": null,
       "tariff_type": "Antidumping",
-      "tariff_rate": positive number ONLY,
-      "effective_date_from": "YYYY-MM-DD or null",
+      "tariff_rate": number or 0,
+      "effective_date_from": null,
       "effective_date_to": null,
       "investigation_period_from": null,
       "investigation_period_to": null,
       "basis_law": "Customs Act 1901",
-      "company": "Company name",
-      "case_number": "ADN 20XX/XXX or REP XXX",
-      "product_description": "Steel products",
+      "company": "Company name from table row",
+      "case_number": null,
+      "product_description": null,
       "note": null
     }
   ]
@@ -208,82 +253,59 @@ class AustraliaVisionParser(VisionBasedParser):
 
     def create_extraction_prompt(self) -> str:
         """호주 관세 문서에 특화된 프롬프트 (Vision)"""
-        return """Extract tariff/trade remedy information from the Australian document images.
+        return """Extract tariff/trade remedy information from Australian Anti-Dumping document.
 
-**CRITICAL INSTRUCTIONS:**
+**⚠️⚠️⚠️ EXTREMELY IMPORTANT ⚠️⚠️⚠️**
 
-1. **HS Code Table Extraction - EXTREMELY IMPORTANT:**
-   - Australian documents contain HS code tables that may span 10-20 pages
-   - CAREFULLY examine ALL pages for tables containing HS codes
-   - Tables have columns: "Tariff subheading", "Statistical code", "Description"
-   - In the "Tariff subheading" column, there are:
-     * Headers (4-digit): 7210, 7212, 7225, 7226 - NOT HS codes
-     * Sub-headers (6-digit): 7210.4, 7225.9, 7226.9 - NOT HS codes
-     * Actual HS codes (8-digit): 7210.49.00, 7212.30.00, 7225.92.00, 7226.99.00 - THESE ARE HS CODES!
-   - Extract EVERY SINGLE 8-digit HS code (XXXX.XX.XX format) across all pages
-   - DO NOT extract headers or sub-headers
-   - DO NOT miss any 8-digit HS codes from any page
+**STEP 1: FIND THE PAGE WITH "10 MEASURES" OR "10. MEASURES" HEADING**
+- Scroll/look through the document until you find the section titled "10 MEASURES"
+- This is usually on page 30+ of the document
 
-2. **HS Code Validation - VERY IMPORTANT:**
-   - ONLY extract 8-digit HS codes in format XXXX.XX.XX (e.g., 7210.49.00)
-   - DO NOT extract 4-digit headers like "7210", "7212", "7225", "7226"
-   - DO NOT extract 6-digit sub-headers like "7210.4", "7225.9", "7226.9"
-   - DO NOT extract 2-digit numbers from "Statistical code" column like "55", "56", "57", "58", "61", "38", "71"
-   - Statistical codes are in a SEPARATE column and are NOT HS codes
-   - Verify each HS code has EXACTLY the format XXXX.XX.XX before including it
-   - If a section references goods but no 8-digit HS code is shown, set hs_code to null
+**STEP 2: EXTRACT DATA FROM THE TABLE(S) THAT APPEAR AFTER "10 MEASURES" HEADING**
+- The table(s) you need are IMMEDIATELY AFTER the "10 MEASURES" heading
+- These tables show the FINAL duty rates
 
-3. **Complete Combinations - MANDATORY:**
-   - For EACH HS code found in the tables, create items for EACH affected country
-   - For EACH HS code found in the tables, create items for EACH affected company
-   - Example: If you find 20 HS codes, 3 countries (China, Korea, Taiwan), and 5 companies,
-     you should create 20 × 3 × 5 = 300 items (or appropriate combinations based on the data)
-   - DO NOT create a single item with multiple HS codes - SEPARATE them
-   - DO NOT create a single item with multiple countries - SEPARATE them
+**❌ DO NOT EXTRACT FROM THESE (WRONG TABLES):**
+- Tables showing "Hong Shun", "Chung Hung", "Sheng Yu Steel"
+- Tables at the beginning or middle of the document
+- Any table that appears BEFORE the "10 MEASURES" heading
+- Exporter/Producer summary tables from earlier sections
 
-4. **Data Extraction from Tables:**
-   - Look for product descriptions associated with each HS code
-   - Extract company names and their specific rates
-   - Note investigation periods and effective dates
-   - Extract case numbers (ADN numbers)
+**✅ EXTRACT ONLY FROM THE TABLE AFTER "10 MEASURES" HEADING:**
+- This table contains columns like: Exporter, Manufacturer, Dumping Margin, Duty Rate
+- Look for the FINAL anti-dumping duty percentages
+- Countries: China, Korea, Taiwan, Vietnam, etc.
+- Company names with their specific duty rates
 
-5. **Australian Document Structure:**
-   - First few pages: Introduction, background
-   - Middle pages (typically 10-20 pages): HS code tables
-   - Later pages: Company-specific information, rates, adjustments
-   - Some sections may show changes without repeating all HS codes - in these cases,
-     reference back to the HS codes found in earlier tables
+**WHAT TO EXTRACT:**
+1. Company names from the "10 MEASURES" table
+2. Duty rates (percentages) from that table
+3. Countries associated with each company
+4. HS Codes (if shown) - format XXXX.XX.XX
+5. Case numbers (ADN 20XX/XXX)
 
-OUTPUT JSON FORMAT:
-
+**OUTPUT JSON FORMAT:**
 {
   "items": [
     {
-      "country": "Single country name ONLY (e.g., China, Korea, Taiwan)",
-      "hs_code": "Single HS code in format XXXX.XX.XX or null",
-      "tariff_type": "Antidumping or Countervailing or Safeguard",
-      "tariff_rate": number,
+      "country": "Country name",
+      "hs_code": "XXXX.XX.XX or null",
+      "tariff_type": "Antidumping",
+      "tariff_rate": number or null,
       "effective_date_from": "YYYY-MM-DD or null",
-      "effective_date_to": "YYYY-MM-DD or null",
-      "investigation_period_from": "YYYY-MM-DD or null",
-      "investigation_period_to": "YYYY-MM-DD or null",
-      "basis_law": "Legal basis",
-      "company": "Company name or null",
-      "case_number": "ADN number or null",
-      "product_description": "Product description",
-      "note": "Notes or null"
+      "effective_date_to": null,
+      "investigation_period_from": null,
+      "investigation_period_to": null,
+      "basis_law": "Customs Act 1901",
+      "company": "Company name",
+      "case_number": "ADN 20XX/XXX or null",
+      "product_description": null,
+      "note": null
     }
   ]
 }
 
-**FINAL CHECKLIST:**
-- [ ] Did I extract ALL HS codes from ALL pages of tables?
-- [ ] Did I create separate items for each HS code?
-- [ ] Did I create separate items for each country?
-- [ ] Did I verify each HS code follows XXXX.XX.XX format?
-- [ ] Did I create all necessary combinations?
-
-**Output ONLY JSON, no explanatory text.**
+**Output ONLY valid JSON.**
 """
 
 

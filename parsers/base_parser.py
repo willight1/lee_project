@@ -57,8 +57,8 @@ class TextBasedParser:
 
     def __init__(self, client: OpenAI):
         self.client = client
-        self.model_name = "gpt-4o-mini"  # 저렴한 텍스트 모델
-        self.vision_model = "gpt-4o-mini"  # 이미지 PDF용 (Vision 지원)
+        self.model_name = "gpt-4.1"  # 텍스트 모델
+        self.vision_model = "gpt-4.1"  # 이미지 PDF용 (Vision 지원)
 
     def parse_text_with_llm(
         self,
@@ -246,7 +246,7 @@ class VisionBasedParser:
 
     def __init__(self, client: OpenAI):
         self.client = client
-        self.model_name = "gpt-4o-mini"  # Vision 모델 (gpt-4o 접근 불가시 폴백)
+        self.model_name = "gpt-4o"  # Vision 모델
 
     def enhance_image(self, img_bytes: bytes) -> bytes:
         """이미지 품질 향상 (선명도, 대비)"""
