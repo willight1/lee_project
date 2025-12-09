@@ -119,17 +119,13 @@ class USATextParser(DefaultTextParser):
         if not items:
             return items
         
-        # 3. LLM에서 추출한 HS Code도 추가
-        for item in items:
-            if item.get('hs_code'):
-                validated = validate_usa_hs_code(item['hs_code'])
-                if validated:
-                    all_hs_codes.add(validated)
-        
-        # 4. HS Code가 하나도 없으면 원본 반환 (HS Code가 없는 문서)
+        # 3. PDF에서 직접 추출한 HS Code만 사용 (LLM 생성 HS Code는 무시)
+        # PDF에 HTSUS 섹션이 없으면 HS Code 없이 회사 정보만 저장
         if not all_hs_codes:
-            print(f"  📊 No HS codes found, returning original {len(items)} items")
-            # 중복만 제거하고 반환
+            print(f"  📊 No HS codes in PDF, setting hs_code to null for all {len(items)} items")
+            # HS 코드를 null로 설정
+            for item in items:
+                item['hs_code'] = None
             return self._deduplicate_items(items)
         
         # 5. 국가/회사별 정보 수집
@@ -228,6 +224,11 @@ class USATextParser(DefaultTextParser):
         return """Extract tariff/trade remedy information from the US document text.
 
 **CRITICAL INSTRUCTIONS:**
+
+**DOCUMENT LAYOUT:**
+- US documents have 3 columns, read from LEFT to RIGHT
+- Within each column, read from TOP to BOTTOM
+- Read Column 1 (leftmost) completely, then Column 2 (middle), then Column 3 (rightmost)
 
 0. **IGNORE FOOTNOTES - VERY IMPORTANT:**
    - DO NOT read or extract data from footnotes
@@ -336,6 +337,11 @@ class USAVisionParser(VisionBasedParser):
         return """Extract tariff/trade remedy information from the US document images.
 
 **CRITICAL INSTRUCTIONS:**
+
+**DOCUMENT LAYOUT:**
+- US documents have 3 columns, read from LEFT to RIGHT
+- Within each column, read from TOP to BOTTOM
+- Read Column 1 (leftmost) completely, then Column 2 (middle), then Column 3 (rightmost)
 
 0. **IGNORE FOOTNOTES - VERY IMPORTANT:**
    - DO NOT read or extract data from footnotes
